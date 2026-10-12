@@ -5,53 +5,59 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@500;600&display=swap" rel="stylesheet">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/style.css">
-  <title>Sistema RPG — Entrar</title>
+  <title>Sistema RPG</title>
 </head>
 <body>
-  <main class="auth-wrap">
-    <div class="card auth-card">
-      <div class="brand">
-        <div class="logo">🎲</div>
-        <h1>Sistema RPG</h1>
-        <p class="muted small">Mesas online com call por ambiente</p>
+  <main class="entry">
+    <section class="entry-art">
+      <div>
+        <div class="brand"><i data-logo></i><span>Sistema RPG</span></div>
+        <h1>Sua mesa, em qualquer lugar.</h1>
+        <p>Call de voz com ambientes separados, cenas e sons controlados pelo mestre, e compartilhamento de tela.</p>
       </div>
+      <ul>
+        <li>Quem está na floresta ouve só quem está na floresta.</li>
+        <li>O mestre narra para um ambiente, sussurra para um jogador ou fala com todos.</li>
+        <li>Cada ambiente vê a sua cena e ouve o seu som ambiente.</li>
+      </ul>
+    </section>
 
-      <div class="tabs">
-        <button type="button" id="tab-login" class="active">Entrar</button>
-        <button type="button" id="tab-register">Criar conta</button>
+    <section class="entry-form">
+      <div class="box">
+        <p class="eyebrow">Acesso de teste</p>
+        <h2>Criar usuário temporário</h2>
+        <p class="muted small">Sem e-mail e sem senha. O usuário fica salvo neste navegador: cada aparelho cria o seu.</p>
+
+        <form id="temp-form" onsubmit="return false">
+          <label for="temp-name">Nome</label>
+          <input id="temp-name" name="name" maxlength="40" required autocomplete="nickname" placeholder="Como os outros vão te ver">
+          <label>Papel</label>
+          <div class="segmented">
+            <input type="radio" name="role" id="role-jogador" value="jogador" checked>
+            <label for="role-jogador">Jogador</label>
+            <input type="radio" name="role" id="role-mestre" value="mestre">
+            <label for="role-mestre">Mestre</label>
+          </div>
+          <button type="submit" class="primary">Entrar</button>
+          <div class="error" id="temp-error"></div>
+        </form>
+
+        <p class="note">Usuários temporários são para testes. A criação de contas definitivas vai ficar restrita aos administradores.</p>
+        <button type="button" class="link-btn small" id="show-email">Entrar com e-mail e senha</button>
+
+        <form id="login-form" class="hidden" onsubmit="return false">
+          <label for="login-email">E-mail</label>
+          <input id="login-email" name="email" type="email" autocomplete="email" required>
+          <label for="login-password">Senha</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+          <button type="submit">Entrar com e-mail</button>
+          <div class="error" id="login-error"></div>
+        </form>
       </div>
-
-      <form id="login-form" onsubmit="return false">
-        <label for="login-email">E-mail</label>
-        <input id="login-email" name="email" type="email" autocomplete="email" required>
-        <label for="login-password">Senha</label>
-        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-        <button type="submit" class="primary">Entrar</button>
-        <div class="error" id="login-error"></div>
-      </form>
-
-      <form id="register-form" class="hidden" onsubmit="return false">
-        <label>Eu sou</label>
-        <div class="role-picker">
-          <input type="radio" name="role" id="role-mestre" value="mestre">
-          <label for="role-mestre"><span>🧙</span>Mestre</label>
-          <input type="radio" name="role" id="role-jogador" value="jogador" checked>
-          <label for="role-jogador"><span>🗡️</span>Jogador</label>
-        </div>
-        <label for="reg-display">Nome exibido</label>
-        <input id="reg-display" name="displayName" maxlength="40" required placeholder="Como os outros vão te ver">
-        <label for="reg-email">E-mail</label>
-        <input id="reg-email" name="email" type="email" autocomplete="email" required>
-        <label for="reg-password">Senha</label>
-        <input id="reg-password" name="password" type="password" autocomplete="new-password" required minlength="6">
-        <button type="submit" class="primary">Criar conta</button>
-        <div class="error" id="register-error"></div>
-        <div class="notice hidden" id="register-notice"></div>
-      </form>
-    </div>
+    </section>
   </main>
   <script type="module" src="/js/login.js"></script>
 </body>

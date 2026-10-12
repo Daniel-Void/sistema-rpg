@@ -1,6 +1,10 @@
 import { supabase, currentUser, escapeHtml, friendlyError, initials, toast } from './supabase.js';
 import { ICE_SERVERS } from './config.js';
 import { computeRouting, normalizeMasterTarget } from './audioRules.js';
+import { effectiveScene, targetIncludes } from './sceneRules.js';
+import { hydrateIcons, icon } from './icons.js';
+
+hydrateIcons();
 
 const roomId = Number(location.pathname.split('/').filter(Boolean).pop());
 const $ = (id) => document.getElementById(id);
@@ -16,51 +20,92 @@ const joinedAt = Date.now();
 // Estado
 // ---------------------------------------------------------------------------
 
-let db = null; // { room, zones, members, inviteCode } vindo do banco
-let online = new Map(); // userId -> { sessionId, joinedAt, muted } (presença na call)
+let db = null; // { room, zones, members, media } vindo do banco
+let online = new Map(); // userId -> { sessionId, joinedAt, muted, sharing, shareTarget }
 let state = null; // visão calculada para renderizar e rotear
 let channel = null;
 let inCall = false;
 let localStream = null;
 let micTrack = null;
+let screenTrack = null;
+let shareTarget = { type: 'all' };
 let audioCtx = null;
 let muted = false;
+let isMaster = false;
 const peers = new Map(); // userId -> peer
 const analysers = new Map(); // userId -> AnalyserNode
 const speaking = new Set();
+const mediaUrls = new Map(); // mediaId -> { url, signedAt }
+const ambientAudio = new Audio();
+ambientAudio.loop = true;
+const activeSfx = new Set();
 
-const VOLUME_KEY = `rpg-volumes-${roomId}`;
-let zoneVolumes = {};
-try {
-  zoneVolumes = JSON.parse(localStorage.getItem(VOLUME_KEY)) || {};
-} catch {
-  zoneVolumes = {};
+function readStored(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
+function store(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* armazenamento indisponível: vale só nesta aba */
+  }
+}
+const zoneVolumes = readStored(`rpg-volumes-${roomId}`, {});
+let playerSceneVolume = readStored('rpg-scene-volume', 1);
 
-let isMaster = false;
 const emptyRouting = { sendTo: [], hearFrom: [] };
 const routing = () => (state && state.routing) || emptyRouting;
 const playerById = (id) => state && state.players.find((p) => p.userId === id);
 const zoneById = (id) => state && state.zones.find((z) => z.id === id);
+const mediaById = (id) => db && db.media.find((m) => m.id === id);
+const mediaUrl = (id) => (mediaUrls.get(id) || {}).url || null;
 function nameOf(id) {
   if (state && state.master && state.master.userId === id) return `${state.master.displayName} (mestre)`;
   const p = playerById(id);
   return p ? p.displayName : 'Alguém';
 }
+const myZoneId = () => (playerById(user.id) || {}).zoneId ?? null;
 
 // ---------------------------------------------------------------------------
 // Dados do banco
 // ---------------------------------------------------------------------------
 
+const SCENE_COLS = 'scene_media_id, ambient_media_id, scene_caption, ambient_volume';
+
 async function loadData() {
-  const [roomRes, zonesRes, membersRes] = await Promise.all([
-    supabase.from('rooms').select('id, name, description, master_id, master_target, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)').eq('id', roomId).maybeSingle(),
-    supabase.from('zones').select('id, name, position').eq('room_id', roomId).eq('archived', false).order('position').order('id'),
+  const [roomRes, zonesRes, membersRes, mediaRes] = await Promise.all([
+    supabase
+      .from('rooms')
+      .select(`id, name, description, master_id, master_target, ${SCENE_COLS}, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)`)
+      .eq('id', roomId)
+      .maybeSingle(),
+    supabase.from('zones').select(`id, name, position, ${SCENE_COLS}`).eq('room_id', roomId).eq('archived', false).order('position').order('id'),
     supabase.from('room_members').select('user_id, zone_id, whisper_to_master, profile:profiles(display_name)').eq('room_id', roomId),
+    supabase.from('room_media').select('id, kind, name, storage_path, created_at').eq('room_id', roomId).order('created_at'),
   ]);
-  const error = roomRes.error || zonesRes.error || membersRes.error;
+  const error = roomRes.error || zonesRes.error || membersRes.error || mediaRes.error;
   if (error) throw error;
-  return roomRes.data ? { room: roomRes.data, zones: zonesRes.data, members: membersRes.data } : null;
+  if (!roomRes.data) return null;
+  await signMediaUrls(mediaRes.data);
+  return { room: roomRes.data, zones: zonesRes.data, members: membersRes.data, media: mediaRes.data };
+}
+
+/** Gera links temporários (6h) para os arquivos da biblioteca que ainda não têm. */
+async function signMediaUrls(media) {
+  const stale = Date.now() - 5 * 3600 * 1000;
+  const missing = media.filter((m) => !mediaUrls.has(m.id) || mediaUrls.get(m.id).signedAt < stale);
+  if (!missing.length) return;
+  const { data, error } = await supabase.storage.from('midia').createSignedUrls(missing.map((m) => m.storage_path), 6 * 3600);
+  if (error) return console.error('signed urls', error);
+  for (const item of data) {
+    const m = missing.find((x) => x.storage_path === item.path);
+    if (m && item.signedUrl) mediaUrls.set(m.id, { url: item.signedUrl, signedAt: Date.now() });
+  }
 }
 
 let refreshTimer = null;
@@ -115,16 +160,24 @@ function recompute() {
   const myRouting = allRouting[user.id] || emptyRouting;
   const masterSpeaksToMe = Boolean(masterOnline && allRouting[masterId] && allRouting[masterId].sendTo.includes(user.id));
 
+  if (shareTarget.type === 'zone' && !zoneIds.includes(shareTarget.zoneId)) shareTarget = { type: 'all' };
+
   state = {
     zones,
     players,
-    master: { userId: masterId, displayName: (db.room.master && db.room.master.display_name) || 'Mestre', online: Boolean(masterOnline), muted: masterOnline ? masterOnline.muted : false },
+    master: {
+      userId: masterId,
+      displayName: (db.room.master && db.room.master.display_name) || 'Mestre',
+      online: Boolean(masterOnline),
+      muted: masterOnline ? masterOnline.muted : false,
+    },
     // Para jogadores, o alvo do mestre só aparece quando inclui eles.
     masterTarget: isMaster || masterSpeaksToMe ? masterTarget : null,
     routing: inCall ? myRouting : emptyRouting,
   };
 
   render();
+  updateStage();
   if (inCall) {
     reconcilePeers();
     applyAllRouting();
@@ -137,7 +190,7 @@ function handleRemoved(reason) {
 }
 
 // ---------------------------------------------------------------------------
-// Realtime: presença (quem está na call) + mudanças no banco + sinalização
+// Realtime: presença + mudanças no banco + sinalização + efeitos sonoros
 // ---------------------------------------------------------------------------
 
 function connectRealtime() {
@@ -147,7 +200,7 @@ function connectRealtime() {
     channel
       // Atualizações frequentes (alvo do mestre, mover jogador, sussurro) são aplicadas na hora, sem recarregar.
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, ({ new: row }) => {
-        if (db && row) db.room.master_target = row.master_target;
+        if (db && row) Object.assign(db.room, pick(row, ['master_target', 'scene_media_id', 'ambient_media_id', 'scene_caption', 'ambient_volume', 'name']));
         recompute();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, ({ new: row }) => {
@@ -159,15 +212,19 @@ function connectRealtime() {
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, onChange)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'zones', filter: `room_id=eq.${roomId}` }, onChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_media', filter: `room_id=eq.${roomId}` }, onChange)
       // Exclusões não aceitam filtro: qualquer exclusão nessas tabelas faz recarregar.
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'room_members' }, onChange)
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, onChange)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'room_media' }, onChange)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `to_user=eq.${user.id}` }, ({ new: row }) => onSignalRow(row))
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'signals', filter: `to_user=eq.${user.id}` }, ({ new: row }) => onSignalRow(row))
+      .on('broadcast', { event: 'sfx' }, ({ payload }) => onSfx(payload))
+      .on('broadcast', { event: 'sfx-stop' }, () => stopAllSfx())
       .on('presence', { event: 'sync' }, onPresenceSync)
       .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
-          await channel.track({ userId: user.id, joinedAt, muted });
+          await trackPresence();
           scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto conectava
           resolve();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -180,13 +237,24 @@ function connectRealtime() {
   });
 }
 
+function pick(obj, keys) {
+  const out = {};
+  for (const k of keys) if (k in obj) out[k] = obj[k];
+  return out;
+}
+
+function trackPresence() {
+  if (!channel) return Promise.resolve();
+  return channel.track({ userId: user.id, joinedAt, muted, sharing: Boolean(screenTrack), shareTarget });
+}
+
 function onPresenceSync() {
-  // presenceState(): { <sessionId da aba>: [{ userId, joinedAt, muted }] }
+  // presenceState(): { <sessionId da aba>: [{ userId, joinedAt, muted, sharing, shareTarget }] }
   const next = new Map();
   for (const [key, metas] of Object.entries(channel.presenceState())) {
     for (const m of metas) {
       if (!m.userId) continue;
-      const entry = { sessionId: key, joinedAt: m.joinedAt || 0, muted: Boolean(m.muted) };
+      const entry = { sessionId: key, joinedAt: m.joinedAt || 0, muted: Boolean(m.muted), sharing: Boolean(m.sharing), shareTarget: m.shareTarget || null };
       const current = next.get(m.userId);
       // Se o mesmo usuário estiver em duas abas, vale a mais recente
       if (!current || entry.joinedAt > current.joinedAt) next.set(m.userId, entry);
@@ -204,6 +272,7 @@ function onPresenceSync() {
 
 // ---------------------------------------------------------------------------
 // WebRTC (malha P2P com "perfect negotiation"; sinais vão pelo banco)
+// Cada conexão tem um canal de áudio (voz) e um de vídeo (tela do mestre).
 // ---------------------------------------------------------------------------
 
 async function sendSignal(peer, data) {
@@ -247,18 +316,31 @@ function createPeer(peerId, peerSession, initiator) {
     polite: !initiator,
     makingOffer: false,
     ignoreOffer: false,
-    transceiver: null,
+    audioTx: null,
+    videoTx: null,
+    videoTrack: null,
     seq: 0,
     lastSeq: 0,
     queue: Promise.resolve(),
   };
   peers.set(peerId, peer);
 
-  if (initiator) peer.transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+  if (initiator) {
+    peer.audioTx = pc.addTransceiver('audio', { direction: 'sendrecv' });
+    peer.videoTx = pc.addTransceiver('video', { direction: 'sendrecv' });
+  }
 
-  pc.ontrack = ({ track, streams, transceiver }) => {
-    peer.transceiver = peer.transceiver || transceiver;
-    const stream = streams[0] || new MediaStream([track]);
+  pc.ontrack = ({ track, transceiver }) => {
+    if (track.kind === 'video') {
+      peer.videoTx = peer.videoTx || transceiver;
+      peer.videoTrack = track;
+      track.onunmute = updateStage;
+      track.onmute = updateStage;
+      updateStage();
+      return;
+    }
+    peer.audioTx = peer.audioTx || transceiver;
+    const stream = new MediaStream([track]);
     audio.srcObject = stream;
     audio.play().catch(() => {});
     watchLevel(peerId, stream);
@@ -341,9 +423,10 @@ async function handleDescription(peer, description) {
   if (peer.ignoreOffer) return;
   await pc.setRemoteDescription(description);
   if (description.type === 'offer') {
-    const t = pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'audio');
-    if (t) {
-      peer.transceiver = t;
+    for (const t of pc.getTransceivers()) {
+      const kind = t.receiver.track.kind;
+      if (kind === 'audio' && !peer.audioTx) peer.audioTx = t;
+      if (kind === 'video' && !peer.videoTx) peer.videoTx = t;
       t.direction = 'sendrecv';
     }
     await applyPeerRouting(peer);
@@ -352,22 +435,30 @@ async function handleDescription(peer, description) {
   }
 }
 
+/** Para quem a tela do mestre vai (todos os jogadores ou só um ambiente). */
+function shareIncludes(peerId) {
+  const p = playerById(peerId);
+  return Boolean(p) && targetIncludes(shareTarget, { userId: peerId, zoneId: p.zoneId });
+}
+
 /**
- * Aplica as regras de áudio a uma conexão:
+ * Aplica as regras a uma conexão:
  *  - só ENVIA o microfone se as regras dizem que esse peer pode nos ouvir;
- *  - só TOCA o áudio recebido se as regras dizem que podemos ouvir esse peer.
+ *  - só TOCA o áudio recebido se as regras dizem que podemos ouvir esse peer;
+ *  - (mestre) só envia a tela para quem está no alvo do compartilhamento.
  */
 async function applyPeerRouting(peer) {
   const r = routing();
-  const sender = peer.transceiver && peer.transceiver.sender;
-  const desired = r.sendTo.includes(peer.id) ? micTrack : null;
-  if (sender && sender.track !== desired) {
+  const replace = async (sender, track) => {
+    if (!sender || sender.track === track) return;
     try {
-      await sender.replaceTrack(desired);
+      await sender.replaceTrack(track);
     } catch (err) {
       console.error('replaceTrack', err);
     }
-  }
+  };
+  await replace(peer.audioTx && peer.audioTx.sender, r.sendTo.includes(peer.id) ? micTrack : null);
+  await replace(peer.videoTx && peer.videoTx.sender, isMaster && screenTrack && shareIncludes(peer.id) ? screenTrack : null);
   peer.audio.muted = !r.hearFrom.includes(peer.id);
   peer.audio.volume = volumeFor(peer.id);
 }
@@ -382,6 +473,171 @@ function volumeFor(userId) {
 
 function applyAllRouting() {
   for (const peer of peers.values()) applyPeerRouting(peer);
+}
+
+// ---------------------------------------------------------------------------
+// Compartilhamento de tela (mestre)
+// ---------------------------------------------------------------------------
+
+async function startShare() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
+    screenTrack = stream.getVideoTracks()[0];
+    screenTrack.contentHint = 'detail';
+    screenTrack.onended = stopShare;
+  } catch (err) {
+    if (err && err.name !== 'NotAllowedError') toast('Não foi possível compartilhar a tela.');
+    return;
+  }
+  await trackPresence();
+  applyAllRouting();
+  renderShareControls();
+  updateStage();
+}
+
+async function stopShare() {
+  if (screenTrack) {
+    screenTrack.onended = null;
+    screenTrack.stop();
+  }
+  screenTrack = null;
+  await trackPresence();
+  applyAllRouting();
+  renderShareControls();
+  updateStage();
+}
+
+// ---------------------------------------------------------------------------
+// Palco: tela compartilhada ou cena do ambiente (com som ambiente)
+// ---------------------------------------------------------------------------
+
+let stageKey = 'none';
+let ambientKey = null;
+
+function targetName(target) {
+  if (!target || target.type === 'all') return 'todos';
+  if (target.type === 'zone') return (zoneById(target.zoneId) || {}).name || 'ambiente';
+  return nameOf(target.userId);
+}
+
+function updateStage() {
+  if (!state) return;
+  const stage = $('stage');
+  const mediaBox = $('stage-media');
+  let key = 'none';
+  let label = '';
+  let caption = '';
+  let build = null;
+
+  const masterPresence = online.get(state.master.userId);
+  const masterPeer = peers.get(state.master.userId);
+  const me = { userId: user.id, zoneId: myZoneId() };
+
+  if (isMaster && screenTrack) {
+    key = `preview:${screenTrack.id}`;
+    label = `Você está compartilhando a tela com ${targetName(shareTarget)}`;
+    build = () => videoEl(new MediaStream([screenTrack]), 'screen');
+  } else if (!isMaster && inCall && masterPresence && masterPresence.sharing && masterPeer && masterPeer.videoTrack && !masterPeer.videoTrack.muted && targetIncludes(masterPresence.shareTarget, me)) {
+    key = `screen:${masterPeer.videoTrack.id}`;
+    label = 'Tela do mestre';
+    build = () => videoEl(new MediaStream([masterPeer.videoTrack]), 'screen');
+  } else if (!isMaster) {
+    const zoneRow = db.zones.find((z) => z.id === me.zoneId);
+    const scene = effectiveScene(db.room, zoneRow);
+    if (scene) {
+      caption = scene.caption;
+      const visual = scene.visualId && mediaById(scene.visualId);
+      const url = visual && mediaUrl(visual.id);
+      if (visual && url) {
+        key = `${visual.kind}:${visual.id}`;
+        build = () => (visual.kind === 'video' ? videoEl(url, 'scene') : imgEl(url));
+      } else if (caption) {
+        key = 'text';
+      }
+    }
+    updateAmbient(scene);
+  }
+
+  stage.classList.toggle('hidden', key === 'none');
+  stage.classList.toggle('text-only', key === 'text');
+  $('stage-caption').textContent = caption;
+  $('stage-label').textContent = label;
+  $('stage-label').classList.toggle('hidden', !label);
+  if (key !== stageKey) {
+    stageKey = key;
+    mediaBox.replaceChildren();
+    if (build) mediaBox.appendChild(build());
+  }
+}
+
+function videoEl(src, kind) {
+  const v = document.createElement('video');
+  v.autoplay = true;
+  v.playsInline = true;
+  v.muted = true;
+  if (kind === 'screen') {
+    v.className = 'screen';
+    v.srcObject = src;
+  } else {
+    v.loop = true;
+    v.src = src;
+  }
+  v.play().catch(() => {});
+  return v;
+}
+
+function imgEl(src) {
+  const img = document.createElement('img');
+  img.alt = '';
+  img.src = src;
+  return img;
+}
+
+function updateAmbient(scene) {
+  const ambient = inCall && scene && scene.ambientId ? mediaById(scene.ambientId) : null;
+  const url = ambient && mediaUrl(ambient.id);
+  const key = url ? ambient.id : null;
+  ambientAudio.volume = Math.min(1, (scene ? scene.volume : 0.6) * playerSceneVolume);
+  if (key === ambientKey) return;
+  ambientKey = key;
+  if (url) {
+    ambientAudio.src = url;
+    ambientAudio.play().catch(() => {});
+  } else {
+    ambientAudio.pause();
+    ambientAudio.removeAttribute('src');
+  }
+}
+
+$('stage-full').onclick = () => {
+  const stage = $('stage');
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (stage.requestFullscreen) stage.requestFullscreen();
+};
+
+// ---------------------------------------------------------------------------
+// Efeitos sonoros
+// ---------------------------------------------------------------------------
+
+function playSfx(mediaId, volume = 1) {
+  const url = mediaUrl(mediaId);
+  if (!url) return;
+  const a = new Audio(url);
+  a.volume = Math.min(1, volume);
+  activeSfx.add(a);
+  a.onended = () => activeSfx.delete(a);
+  a.play().catch(() => activeSfx.delete(a));
+}
+
+function stopAllSfx() {
+  for (const a of activeSfx) a.pause();
+  activeSfx.clear();
+}
+
+function onSfx(payload) {
+  if (!inCall || isMaster || !payload) return;
+  if (!targetIncludes(payload.target, { userId: user.id, zoneId: myZoneId() })) return;
+  playSfx(Number(payload.mediaId), playerSceneVolume);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +714,7 @@ async function startCall() {
   }
   $('join-overlay').classList.add('hidden');
   $('mute-btn').disabled = false;
+  recompute();
 }
 
 function stopCall() {
@@ -466,7 +723,12 @@ function stopCall() {
     supabase.removeChannel(channel);
     channel = null;
   }
+  if (screenTrack) screenTrack.stop();
+  screenTrack = null;
   closeAllPeers();
+  stopAllSfx();
+  ambientAudio.pause();
+  ambientKey = null;
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
   if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
   analysers.clear();
@@ -486,16 +748,25 @@ function showOverlay(title, text, buttonText, onClick) {
 
 function updateConnStatus(connected) {
   const el = $('conn-status');
+  el.classList.remove('ok', 'bad', 'accent');
+  let text;
   if (!connected || !inCall) {
-    el.textContent = '● Desconectado';
-    el.style.color = 'var(--danger)';
-    return;
+    el.classList.add('bad');
+    text = 'Desconectado';
+  } else {
+    const total = peers.size;
+    const ok = [...peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
+    text = total ? `${ok} de ${total} conectados` : 'Na call';
+    el.classList.add(ok === total ? 'ok' : 'accent');
   }
-  const total = peers.size;
-  const ok = [...peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
-  el.textContent = total ? `● ${ok}/${total} conectados` : '● Na call';
-  el.style.color = ok === total ? 'var(--ok)' : 'var(--accent)';
+  el.lastElementChild.textContent = text;
 }
+
+function renderMuteButton() {
+  $('mute-btn').innerHTML = `${icon(muted ? 'micOff' : 'mic', 16)}<span>${muted ? 'Microfone desligado' : 'Microfone'}</span>`;
+  $('mute-btn').classList.toggle('active', muted);
+}
+renderMuteButton();
 
 $('leave-btn').onclick = () => {
   stopCall();
@@ -504,9 +775,8 @@ $('leave-btn').onclick = () => {
 $('mute-btn').onclick = () => {
   muted = !muted;
   if (micTrack) micTrack.enabled = !muted;
-  $('mute-btn').textContent = muted ? '🔇 Microfone mudo' : '🎙️ Microfone ligado';
-  $('mute-btn').classList.toggle('active', muted);
-  if (channel) channel.track({ userId: user.id, joinedAt, muted });
+  renderMuteButton();
+  trackPresence();
 };
 window.addEventListener('pagehide', () => {
   if (channel) channel.untrack();
@@ -518,6 +788,7 @@ async function rpc(name, params) {
     toast(friendlyError(error));
     scheduleRefresh();
   }
+  return !error;
 }
 
 // ---------------------------------------------------------------------------
@@ -528,9 +799,32 @@ function setTarget(target) {
   rpc('set_master_target', { p_target: target });
 }
 
+/** Opções de alvo para selects: todos, ambientes e (opcional) jogadores online. */
+function targetOptions(selected, { players = false } = {}) {
+  const opt = (value, text) => `<option value='${escapeHtml(JSON.stringify(value))}' ${JSON.stringify(value) === JSON.stringify(selected) ? 'selected' : ''}>${escapeHtml(text)}</option>`;
+  const parts = [opt({ type: 'all' }, 'Todos')];
+  parts.push(`<optgroup label="Ambientes">${state.zones.map((z) => opt({ type: 'zone', zoneId: z.id }, z.name)).join('')}</optgroup>`);
+  if (players) {
+    const on = state.players.filter((p) => p.online);
+    if (on.length) parts.push(`<optgroup label="Jogadores">${on.map((p) => opt({ type: 'player', userId: p.userId }, p.displayName)).join('')}</optgroup>`);
+  }
+  return parts.join('');
+}
+
+let sfxTarget = { type: 'all' };
+let sceneDest = 'room'; // 'room' ou id do ambiente
+let sceneDraft = null;
+
 function setupMasterControls() {
-  $('zone-form').addEventListener('submit', (e) => {
-    e.preventDefault();
+  // Abas
+  document.querySelectorAll('[data-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('[data-tab]').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+      document.querySelectorAll('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== tab.dataset.tab));
+    });
+  });
+
+  $('zone-form').addEventListener('submit', () => {
     const name = $('zone-name').value.trim();
     if (!name) return;
     rpc('create_zone', { p_name: name });
@@ -543,7 +837,7 @@ function setupMasterControls() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !e.target.closest('input, textarea')) setTarget({ type: 'all' });
+    if (e.key === 'Escape' && !e.target.closest('input, textarea, select')) setTarget({ type: 'all' });
   });
 
   const zonesEl = $('zones');
@@ -560,6 +854,9 @@ function setupMasterControls() {
     if (btn.dataset.action === 'delete' && confirm('Excluir este ambiente? Os jogadores nele vão para outro ambiente.')) {
       rpc('archive_zone', { p_zone_id: zoneId });
     }
+    if (btn.dataset.action === 'edit-scene') {
+      openSceneEditor(zoneId);
+    }
   });
   zonesEl.addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-move]');
@@ -569,11 +866,7 @@ function setupMasterControls() {
     const range = e.target.closest('input[data-volume]');
     if (!range) return;
     zoneVolumes[range.dataset.volume] = Number(range.value);
-    try {
-      localStorage.setItem(VOLUME_KEY, JSON.stringify(zoneVolumes));
-    } catch {
-      /* armazenamento indisponível: volume vale só nesta aba */
-    }
+    store(`rpg-volumes-${roomId}`, zoneVolumes);
     applyAllRouting();
   });
 
@@ -600,6 +893,140 @@ function setupMasterControls() {
     const userId = e.dataTransfer.getData('text/plain');
     if (userId) rpc('move_player', { p_user_id: userId, p_zone_id: Number(zone.dataset.zone) });
   });
+
+  // Compartilhamento de tela
+  $('share-controls').classList.remove('hidden');
+  $('share-btn').onclick = () => (screenTrack ? stopShare() : startShare());
+  $('share-target').onchange = async (e) => {
+    shareTarget = JSON.parse(e.target.value);
+    await trackPresence();
+    applyAllRouting();
+    updateStage();
+  };
+
+  // Cena
+  $('scene-dest').onchange = (e) => {
+    sceneDest = e.target.value === 'room' ? 'room' : Number(e.target.value);
+    loadSceneDraft();
+    renderSceneEditor();
+  };
+  $('scene-visuals').onclick = (e) => {
+    const thumb = e.target.closest('[data-visual]');
+    if (!thumb) return;
+    sceneDraft.visualId = thumb.dataset.visual === 'none' ? null : Number(thumb.dataset.visual);
+    renderSceneEditor();
+  };
+  $('scene-caption').oninput = (e) => (sceneDraft.caption = e.target.value);
+  $('scene-ambient').onchange = (e) => (sceneDraft.ambientId = e.target.value ? Number(e.target.value) : null);
+  $('scene-volume').oninput = (e) => (sceneDraft.volume = Number(e.target.value));
+  $('scene-apply').onclick = () => applyScene(sceneDraft);
+  $('scene-clear').onclick = () => applyScene({ visualId: null, ambientId: null, caption: '', volume: 0.6 }, true);
+
+  $('media-input').onchange = (e) => {
+    uploadFiles([...e.target.files]);
+    e.target.value = '';
+  };
+  $('media-list').onclick = async (e) => {
+    const btn = e.target.closest('button[data-delete-media]');
+    if (!btn) return;
+    const m = mediaById(Number(btn.dataset.deleteMedia));
+    if (!m || !confirm(`Remover "${m.name}" da biblioteca?`)) return;
+    const { error } = await supabase.from('room_media').delete().eq('id', m.id);
+    if (error) return toast(friendlyError(error));
+    await supabase.storage.from('midia').remove([m.storage_path]);
+    scheduleRefresh();
+  };
+
+  // Sons
+  $('sfx-target').onchange = (e) => (sfxTarget = JSON.parse(e.target.value));
+  $('sfx-grid').onclick = (e) => {
+    const btn = e.target.closest('button[data-sfx]');
+    if (!btn) return;
+    const mediaId = Number(btn.dataset.sfx);
+    if (!channel) return toast('Entre na call para tocar efeitos.');
+    channel.send({ type: 'broadcast', event: 'sfx', payload: { mediaId, target: sfxTarget } });
+    playSfx(mediaId);
+  };
+  $('sfx-stop').onclick = () => {
+    if (channel) channel.send({ type: 'broadcast', event: 'sfx-stop', payload: {} });
+    stopAllSfx();
+  };
+}
+
+function sceneSource(dest) {
+  return dest === 'room' ? db.room : db.zones.find((z) => z.id === dest);
+}
+
+function loadSceneDraft() {
+  const src = sceneSource(sceneDest) || {};
+  sceneDraft = {
+    visualId: src.scene_media_id ?? null,
+    ambientId: src.ambient_media_id ?? null,
+    caption: src.scene_caption || '',
+    volume: typeof src.ambient_volume === 'number' ? src.ambient_volume : 0.6,
+  };
+  $('scene-caption').value = sceneDraft.caption;
+  $('scene-volume').value = sceneDraft.volume;
+}
+
+function openSceneEditor(zoneId) {
+  document.querySelector('[data-tab="cena"]').click();
+  sceneDest = zoneId;
+  loadSceneDraft();
+  renderSceneEditor();
+  $('master-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function applyScene(draft, clear = false) {
+  const ok = await rpc('set_scene', {
+    p_zone_id: sceneDest === 'room' ? null : sceneDest,
+    p_scene_media_id: draft.visualId,
+    p_ambient_media_id: draft.ambientId,
+    p_caption: draft.caption,
+    p_ambient_volume: draft.volume,
+  });
+  if (ok) {
+    toast(clear ? 'Cena limpa.' : 'Cena aplicada.');
+    scheduleRefresh();
+    if (clear) setTimeout(() => {
+      loadSceneDraft();
+      renderSceneEditor();
+    }, 400);
+  }
+}
+
+async function uploadFiles(files) {
+  const status = $('upload-status');
+  let done = 0;
+  for (const file of files) {
+    const kind = file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : null;
+    if (!kind) {
+      toast(`"${file.name}" não é imagem, vídeo nem áudio.`);
+      continue;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      toast(`"${file.name}" passa de 50 MB.`);
+      continue;
+    }
+    status.textContent = `Enviando ${file.name}…`;
+    const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+    const path = `${roomId}/${crypto.randomUUID()}.${ext}`;
+    const { error: upError } = await supabase.storage.from('midia').upload(path, file, { contentType: file.type, upsert: false });
+    if (upError) {
+      toast(friendlyError(upError));
+      continue;
+    }
+    const name = file.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'arquivo';
+    const { error } = await supabase.from('room_media').insert({ room_id: roomId, kind, name, storage_path: path });
+    if (error) {
+      await supabase.storage.from('midia').remove([path]);
+      toast(friendlyError(error));
+      continue;
+    }
+    done += 1;
+  }
+  status.textContent = done ? `${done} ${done === 1 ? 'arquivo enviado' : 'arquivos enviados'}.` : 'Imagens, vídeos e áudios de até 50 MB.';
+  scheduleRefresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -608,14 +1035,14 @@ function setupMasterControls() {
 
 function setupPlayerControls() {
   let whispering = false;
+  const btn = $('whisper-btn');
   const setWhisper = (active) => {
     if (active === whispering || !inCall) return;
     whispering = active;
-    $('whisper-btn').classList.toggle('holding', active);
-    $('whisper-btn').textContent = active ? '🤫 Sussurrando para o mestre…' : '🤫 Segure para sussurrar';
+    btn.classList.toggle('holding', active);
+    btn.lastElementChild.textContent = active ? 'Sussurrando para o mestre' : 'Segure para sussurrar';
     rpc('set_whisper', { p_active: active });
   };
-  const btn = $('whisper-btn');
   btn.addEventListener('pointerdown', (e) => {
     btn.setPointerCapture(e.pointerId);
     setWhisper(true);
@@ -623,12 +1050,20 @@ function setupPlayerControls() {
   btn.addEventListener('pointerup', () => setWhisper(false));
   btn.addEventListener('pointercancel', () => setWhisper(false));
   document.addEventListener('keydown', (e) => {
-    if ((e.key === 'v' || e.key === 'V') && !e.repeat && !e.target.closest('input, textarea')) setWhisper(true);
+    if ((e.key === 'v' || e.key === 'V') && !e.repeat && !e.target.closest('input, textarea, select')) setWhisper(true);
   });
   document.addEventListener('keyup', (e) => {
     if (e.key === 'v' || e.key === 'V') setWhisper(false);
   });
   window.addEventListener('blur', () => setWhisper(false));
+
+  const vol = $('player-scene-volume');
+  vol.value = playerSceneVolume;
+  vol.oninput = () => {
+    playerSceneVolume = Number(vol.value);
+    store('rpg-scene-volume', playerSceneVolume);
+    updateStage();
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -640,26 +1075,26 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
   const draggable = isMaster && !master;
   const zoneOptions =
     draggable && state.zones.length > 1
-      ? `<select data-move="${escapeHtml(userId)}" title="Mover para…">${state.zones
+      ? `<select data-move="${escapeHtml(userId)}" title="Mover para">${state.zones
           .map((z) => `<option value="${z.id}" ${z.id === zoneId ? 'selected' : ''}>${escapeHtml(z.name)}</option>`)
           .join('')}</select>`
       : '';
   const whisperBtn =
     isMaster && !master && isOnline
-      ? `<button class="small ghost ${isWhisperTarget(userId) ? 'active' : ''}" data-action="whisper" data-user="${escapeHtml(userId)}" title="Falar só com este jogador">🤫</button>`
+      ? `<button class="sm icon-only ${isWhisperTarget(userId) ? 'whisper-active' : ''}" data-action="whisper" data-user="${escapeHtml(userId)}" title="Falar só com ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
       : '';
-  const sub = master ? (isOnline ? 'Mestre · na call' : 'Mestre · fora da call') : isOnline ? 'Na call' : 'Offline';
+  const sub = master ? (isOnline ? 'Mestre, na call' : 'Mestre, fora da call') : isOnline ? 'Na call' : 'Fora da call';
   return `
-    <div class="person ${isOnline ? '' : 'offline'} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
+    <div class="person ${isOnline ? '' : 'offline'} ${master ? 'master' : ''} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
          data-user="${escapeHtml(userId)}" ${draggable ? 'draggable="true"' : ''}>
-      <div class="avatar">${master ? '🧙' : escapeHtml(initials(displayName))}</div>
+      <div class="avatar">${escapeHtml(initials(displayName))}</div>
       <div class="info">
         <div class="name">${escapeHtml(displayName)}${me ? ' <span class="muted">(você)</span>' : ''}</div>
         <div class="sub">${sub}</div>
       </div>
       <div class="badges">
-        ${isMuted ? '<span class="badge muted-mic" title="Microfone mudo">🔇</span>' : ''}
-        ${whisperToMaster && isOnline ? '<span class="badge whisper">sussurrando</span>' : ''}
+        ${isMuted ? `<span title="Microfone desligado">${icon('micOff', 15)}</span>` : ''}
+        ${whisperToMaster && isOnline ? '<span class="tag whisper">sussurrando</span>' : ''}
       </div>
       ${zoneOptions || whisperBtn ? `<div class="controls">${zoneOptions}${whisperBtn}</div>` : ''}
     </div>`;
@@ -668,10 +1103,22 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
 const isWhisperTarget = (userId) => state.masterTarget && state.masterTarget.type === 'player' && state.masterTarget.userId === userId;
 const isZoneTarget = (zoneId) => state.masterTarget && state.masterTarget.type === 'zone' && state.masterTarget.zoneId === zoneId;
 
+function sceneSummary(zone) {
+  const scene = effectiveScene(db.room, zone);
+  if (!scene) return '<span class="muted">Sem cena</span>';
+  const visual = scene.visualId && mediaById(scene.visualId);
+  const ambient = scene.ambientId && mediaById(scene.ambientId);
+  const parts = [];
+  if (visual) parts.push(`<span>${icon(visual.kind === 'video' ? 'film' : 'image', 13)}${escapeHtml(visual.name)}</span>`);
+  if (ambient) parts.push(`<span>${icon('music', 13)}${escapeHtml(ambient.name)}</span>`);
+  if (!visual && scene.caption) parts.push(`<span>“${escapeHtml(scene.caption.slice(0, 40))}”</span>`);
+  if (scene.from === 'room') parts.push('<span class="muted">(cena padrão)</span>');
+  return parts.join('');
+}
+
 function render() {
   if (!state) return;
-  const me = playerById(user.id);
-  const myZone = me ? me.zoneId : null;
+  const myZone = myZoneId();
 
   $('master-row').innerHTML = personHtml({ ...state.master, master: true });
 
@@ -686,22 +1133,24 @@ function render() {
           ${
             isMaster
               ? `<div class="tools">
-                  <button class="small ghost" data-action="rename" data-zone="${zone.id}" title="Renomear">✏️</button>
-                  ${state.zones.length > 1 ? `<button class="small ghost" data-action="delete" data-zone="${zone.id}" title="Excluir">🗑️</button>` : ''}
+                  <button class="sm quiet icon-only" data-action="edit-scene" data-zone="${zone.id}" title="Editar cena deste ambiente">${icon('image', 15)}</button>
+                  <button class="sm quiet icon-only" data-action="rename" data-zone="${zone.id}" title="Renomear">${icon('pencil', 15)}</button>
+                  ${state.zones.length > 1 ? `<button class="sm quiet icon-only" data-action="delete" data-zone="${zone.id}" title="Excluir">${icon('trash', 15)}</button>` : ''}
                 </div>`
               : zone.id === myZone
-                ? '<span class="pill">Você está aqui</span>'
+                ? '<span class="tag accent">Você está aqui</span>'
                 : ''
           }
         </div>
+        ${isMaster ? `<div class="zone-scene">${sceneSummary(zone)}</div>` : ''}
         <div class="zone-players">
-          ${members.length ? members.map((p) => personHtml(p)).join('') : '<div class="hint">Ninguém aqui.</div>'}
+          ${members.length ? members.map((p) => personHtml(p)).join('') : '<div class="hint" style="padding:0.25rem 0.5rem">Ninguém aqui.</div>'}
         </div>
         ${
           isMaster
             ? `<div class="zone-foot">
-                <button class="small ${isZoneTarget(zone.id) ? 'active' : ''}" data-action="narrate" data-zone="${zone.id}">📢 Narrar só para este ambiente</button>
-                <div class="vol">🔊 <input type="range" min="0" max="1" step="0.05" value="${vol}" data-volume="${zone.id}" title="Quanto você ouve deste ambiente"></div>
+                <button class="sm ${isZoneTarget(zone.id) ? 'active' : ''}" data-action="narrate" data-zone="${zone.id}">${icon('broadcast', 15)}Narrar só para este ambiente</button>
+                <div class="vol" title="Quanto você ouve deste ambiente">${icon('volume', 15)}<input type="range" min="0" max="1" step="0.05" value="${vol}" data-volume="${zone.id}"></div>
               </div>`
             : ''
         }
@@ -710,8 +1159,14 @@ function render() {
     .join('');
 
   renderTalkStatus(myZone);
-  if (isMaster) renderTargets();
-  else renderHearing();
+  if (isMaster) {
+    renderTargets();
+    renderShareControls();
+    renderSceneEditor();
+    renderSfx();
+  } else {
+    renderHearing();
+  }
 }
 
 function renderTalkStatus(myZone) {
@@ -724,13 +1179,13 @@ function renderTalkStatus(myZone) {
 
   if (isMaster) {
     label = 'Você está falando com';
-    if (!target || target.type === 'all') value = '📣 Todos';
+    if (!target || target.type === 'all') value = 'Todos';
     else if (target.type === 'zone') {
-      value = `📢 ${zoneById(target.zoneId).name}`;
+      value = zoneById(target.zoneId).name;
       hint = 'Os outros ambientes continuam conversando entre si, sem ouvir você.';
     } else {
-      value = `🤫 ${nameOf(target.userId)}`;
-      hint = 'Só este jogador ouve você.';
+      value = nameOf(target.userId);
+      hint = 'Sussurro: só este jogador ouve você.';
       whisper = true;
     }
   } else {
@@ -740,10 +1195,10 @@ function renderTalkStatus(myZone) {
     else if (!target) {
       value = 'Outro ambiente';
       hint = 'Você não está ouvindo o mestre agora.';
-    } else if (target.type === 'all') value = '📣 Todos';
-    else if (target.type === 'zone') value = '📢 Seu ambiente';
+    } else if (target.type === 'all') value = 'Todos';
+    else if (target.type === 'zone') value = 'Seu ambiente';
     else {
-      value = '🤫 Você, em particular';
+      value = 'Você, em particular';
       whisper = true;
     }
     hint = `${hint} Você está em: ${zoneName}.`.trim();
@@ -756,21 +1211,75 @@ function renderTalkStatus(myZone) {
 
 function renderTargets() {
   const t = state.masterTarget || { type: 'all' };
-  const btn = (target, text, active) =>
-    `<button class="small ${active ? 'active' : ''}" data-target='${escapeHtml(JSON.stringify(target))}'>${text}</button>`;
+  const btn = (target, text, active, extra = '', cls = 'active') =>
+    `<button class="sm ${active ? cls : ''}" data-target='${escapeHtml(JSON.stringify(target))}'>${text}${extra}</button>`;
   const onlinePlayers = state.players.filter((p) => p.online);
   $('targets').innerHTML = [
-    btn({ type: 'all' }, '📣 Todos', t.type === 'all'),
-    '<div class="target-group">Ambientes</div>',
+    btn({ type: 'all' }, `${icon('broadcast', 15)}Todos`, t.type === 'all'),
+    '<p class="eyebrow group-label">Ambientes</p>',
     ...state.zones.map((z) => {
       const count = onlinePlayers.filter((p) => p.zoneId === z.id).length;
-      return btn({ type: 'zone', zoneId: z.id }, `📢 ${escapeHtml(z.name)} <span class="muted">(${count})</span>`, isZoneTarget(z.id));
+      return btn({ type: 'zone', zoneId: z.id }, escapeHtml(z.name), isZoneTarget(z.id), `<span class="count">${count}</span>`);
     }),
-    '<div class="target-group">Sussurro</div>',
+    '<p class="eyebrow group-label">Sussurro</p>',
     ...(onlinePlayers.length
-      ? onlinePlayers.map((p) => btn({ type: 'player', userId: p.userId }, `🤫 ${escapeHtml(p.displayName)}`, isWhisperTarget(p.userId)))
-      : ['<div class="hint">Nenhum jogador online.</div>']),
+      ? onlinePlayers.map((p) => btn({ type: 'player', userId: p.userId }, `${icon('whisper', 15)}${escapeHtml(p.displayName)}`, isWhisperTarget(p.userId), '', 'whisper-active'))
+      : ['<div class="hint">Nenhum jogador na call.</div>']),
   ].join('');
+}
+
+function renderShareControls() {
+  if (!isMaster || !state) return;
+  $('share-target').innerHTML = targetOptions(shareTarget);
+  const btn = $('share-btn');
+  btn.classList.toggle('active', Boolean(screenTrack));
+  btn.lastElementChild.textContent = screenTrack ? 'Parar compartilhamento' : 'Compartilhar tela';
+  btn.disabled = !inCall;
+}
+
+function renderSceneEditor() {
+  if (!isMaster || !state) return;
+  if (!sceneDraft || (sceneDest !== 'room' && !db.zones.some((z) => z.id === sceneDest))) {
+    sceneDest = sceneDest !== 'room' && db.zones.some((z) => z.id === sceneDest) ? sceneDest : 'room';
+    loadSceneDraft();
+  }
+  $('scene-dest').innerHTML = [
+    `<option value="room" ${sceneDest === 'room' ? 'selected' : ''}>Cena padrão (quem estiver em ambiente sem cena)</option>`,
+    ...state.zones.map((z) => `<option value="${z.id}" ${sceneDest === z.id ? 'selected' : ''}>${escapeHtml(z.name)}</option>`),
+  ].join('');
+
+  const visuals = db.media.filter((m) => m.kind === 'image' || m.kind === 'video');
+  $('scene-visuals').innerHTML = [
+    `<button class="thumb ${sceneDraft.visualId == null ? 'selected' : ''}" data-visual="none" title="Sem imagem">Nenhuma</button>`,
+    ...visuals.map((m) => {
+      const url = mediaUrl(m.id);
+      const inner = !url ? escapeHtml(m.name) : m.kind === 'video' ? `<video src="${escapeHtml(url)}#t=0.5" muted preload="metadata"></video>` : `<img src="${escapeHtml(url)}" alt="" loading="lazy">`;
+      return `<button class="thumb ${sceneDraft.visualId === m.id ? 'selected' : ''}" data-visual="${m.id}" title="${escapeHtml(m.name)}">${inner}${m.kind === 'video' ? `<span class="kind">${icon('film', 12)}</span>` : ''}</button>`;
+    }),
+  ].join('');
+
+  const audios = db.media.filter((m) => m.kind === 'audio');
+  $('scene-ambient').innerHTML = [
+    `<option value="">Nenhum</option>`,
+    ...audios.map((m) => `<option value="${m.id}" ${sceneDraft.ambientId === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`),
+  ].join('');
+
+  $('media-list').innerHTML = db.media.length
+    ? db.media
+        .map(
+          (m) => `<div class="media-item">${icon(m.kind === 'audio' ? 'music' : m.kind === 'video' ? 'film' : 'image', 15)}<span class="name" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</span>
+            <button class="sm quiet icon-only" data-delete-media="${m.id}" title="Remover">${icon('trash', 14)}</button></div>`,
+        )
+        .join('')
+    : '<div class="hint">A biblioteca está vazia.</div>';
+}
+
+function renderSfx() {
+  $('sfx-target').innerHTML = targetOptions(sfxTarget, { players: true });
+  const audios = db.media.filter((m) => m.kind === 'audio');
+  $('sfx-grid').innerHTML = audios.length
+    ? audios.map((m) => `<button class="sm" data-sfx="${m.id}" title="${escapeHtml(m.name)}">${icon('play', 13)}<span>${escapeHtml(m.name)}</span></button>`).join('')
+    : '<div class="hint" style="grid-column:1/-1">Nenhum áudio na biblioteca.</div>';
 }
 
 function renderHearing() {
@@ -797,9 +1306,7 @@ if (!db) {
   if (isMaster && inviteCode) {
     $('invite').classList.remove('hidden');
     $('invite-code').textContent = inviteCode;
-    $('invite').title = 'Clique para copiar';
-    $('invite').style.cursor = 'pointer';
-    $('invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado!'));
+    $('copy-invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado.'));
   }
   $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
   if (isMaster) setupMasterControls();

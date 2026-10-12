@@ -1,12 +1,15 @@
 import { supabase, currentUser, escapeHtml, friendlyError, toast } from './supabase.js';
+import { hydrateIcons, icon } from './icons.js';
+
+hydrateIcons();
 
 const user = await currentUser();
 if (!user) location.replace('/?next=/painel');
 
 document.getElementById('who').textContent = user.displayName;
-const pill = document.getElementById('role-pill');
-pill.textContent = user.role === 'mestre' ? '🧙 Mestre' : '🗡️ Jogador';
-pill.classList.add(`role-${user.role}`);
+const roleTag = document.getElementById('role-tag');
+roleTag.textContent = user.role === 'mestre' ? 'Mestre' : 'Jogador';
+if (user.role === 'mestre') roleTag.classList.add('accent');
 if (user.role !== 'mestre') document.getElementById('create-card').classList.add('hidden');
 
 document.getElementById('logout').addEventListener('click', async () => {
@@ -34,17 +37,17 @@ async function loadRooms() {
       const code = r.room_invites && r.room_invites.code;
       const players = (r.room_members[0] && r.room_members[0].count) || 0;
       return `
-      <article class="card room-card">
+      <article class="panel room-card">
         <h3>${escapeHtml(r.name)}</h3>
-        ${r.description ? `<p class="muted small">${escapeHtml(r.description)}</p>` : ''}
+        ${r.description ? `<p class="muted small" style="margin:0">${escapeHtml(r.description)}</p>` : ''}
         <div class="meta">
-          <span class="pill ${isMaster ? 'role-mestre' : ''}">${isMaster ? '🧙 Você é o mestre' : `Mestre: ${escapeHtml(r.master && r.master.display_name)}`}</span>
-          <span class="pill">👥 ${players} jogador(es)</span>
+          ${isMaster ? '<span class="tag accent">Você é o mestre</span>' : `<span class="tag">Mestre: ${escapeHtml(r.master && r.master.display_name)}</span>`}
+          <span class="tag">${icon('users', 13)}${players} ${players === 1 ? 'jogador' : 'jogadores'}</span>
         </div>
-        ${isMaster && code ? `<div class="small muted">Convite: <span class="code">${escapeHtml(code)}</span> <button class="small ghost" data-copy="${escapeHtml(code)}">Copiar</button></div>` : ''}
-        <div class="row">
-          <a class="btn primary" href="/sala/${r.id}">Abrir sala</a>
-          ${isMaster ? `<button class="danger" data-delete="${r.id}">Excluir</button>` : `<button class="ghost" data-leave="${r.id}">Sair</button>`}
+        ${isMaster && code ? `<div class="invite">Convite <span class="code">${escapeHtml(code)}</span> <button class="sm quiet icon-only" data-copy="${escapeHtml(code)}" title="Copiar código">${icon('copy', 15)}</button></div>` : ''}
+        <div class="actions">
+          <a class="btn primary" href="/sala/${r.id}">Abrir</a>
+          ${isMaster ? `<button class="danger" data-delete="${r.id}">Excluir</button>` : `<button data-leave="${r.id}">Sair</button>`}
         </div>
       </article>`;
     })

@@ -5,47 +5,53 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@500;600&display=swap" rel="stylesheet">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/style.css">
-  <title>Sistema RPG — Painel</title>
+  <title>Painel — Sistema RPG</title>
 </head>
 <body>
   <header class="topbar">
-    <div class="title"><span>🎲</span><h1>Sistema RPG</h1></div>
-    <div class="actions">
-      <span id="who" class="muted small"></span>
-      <span id="role-pill" class="pill"></span>
-      <button id="logout" class="small ghost">Sair</button>
+    <div class="left">
+      <a class="brand" href="/painel"><i data-logo></i><span>Sistema RPG</span></a>
+    </div>
+    <div class="right">
+      <span id="who" class="small"></span>
+      <span id="role-tag" class="tag"></span>
+      <button id="logout" class="sm quiet" title="Sair"><i data-icon="logout" data-size="16"></i>Sair</button>
     </div>
   </header>
 
-  <main class="container">
+  <main class="page">
     <div class="grid-2">
-      <section class="card" id="create-card">
-        <h2>Criar nova sala</h2>
+      <section class="panel" id="create-card">
+        <p class="eyebrow">Mestre</p>
+        <h2>Nova sala</h2>
         <form id="create-form" onsubmit="return false">
           <label for="room-name">Nome da sala</label>
-          <input id="room-name" maxlength="60" required placeholder="Ex.: A Maldição de Strahd">
-          <label for="room-desc">Descrição (opcional)</label>
+          <input id="room-name" maxlength="60" required placeholder="A Maldição de Strahd">
+          <label for="room-desc">Descrição <span class="muted">(opcional)</span></label>
           <textarea id="room-desc" rows="2" maxlength="500"></textarea>
           <button type="submit" class="primary" style="margin-top:1rem">Criar sala</button>
           <div class="error" id="create-error"></div>
         </form>
       </section>
-      <section class="card">
-        <h2>Entrar com código</h2>
-        <p class="muted small">Peça o código de convite para o mestre da mesa.</p>
+      <section class="panel">
+        <p class="eyebrow">Convite</p>
+        <h2>Entrar em uma sala</h2>
+        <p class="muted small">Use o código de 6 letras que o mestre passou.</p>
         <form id="join-form" onsubmit="return false">
-          <label for="join-code">Código de convite</label>
-          <input id="join-code" maxlength="16" required placeholder="Ex.: K7M2QX" style="text-transform:uppercase">
-          <button type="submit" class="primary" style="margin-top:1rem">Entrar na sala</button>
+          <label for="join-code">Código</label>
+          <input id="join-code" class="mono" maxlength="16" required placeholder="K7M2QX" style="text-transform:uppercase;letter-spacing:0.12em">
+          <button type="submit" class="primary" style="margin-top:1rem">Entrar</button>
           <div class="error" id="join-error"></div>
         </form>
       </section>
     </div>
 
-    <h2 style="margin-top:2rem">Minhas salas</h2>
+    <div class="page-head" style="margin-top:2.5rem">
+      <h2 style="margin:0">Minhas salas</h2>
+    </div>
     <div id="rooms" class="room-list"></div>
   </main>
   <script type="module" src="/js/painel.js"></script>

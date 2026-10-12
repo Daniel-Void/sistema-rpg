@@ -5,62 +5,126 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&family=Spectral:wght@500;600&display=swap" rel="stylesheet">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/css/style.css">
-  <title>Sistema RPG — Sala</title>
+  <title>Sala — Sistema RPG</title>
 </head>
 <body>
   <header class="topbar">
-    <div class="title">
-      <a href="/painel" class="btn small ghost" title="Voltar ao painel">←</a>
-      <h1 id="room-name">Carregando…</h1>
-      <span id="invite" class="pill hidden">Convite: <span class="code" id="invite-code"></span></span>
+    <div class="left">
+      <a href="/painel" class="btn sm quiet icon-only" title="Voltar ao painel"><i data-icon="back"></i></a>
+      <h1 id="room-name">Carregando</h1>
+      <span id="invite" class="invite hidden">Convite <span class="code" id="invite-code"></span>
+        <button id="copy-invite" class="sm quiet icon-only" title="Copiar código"><i data-icon="copy" data-size="15"></i></button>
+      </span>
     </div>
-    <div class="actions">
-      <span id="conn-status" class="pill">Desconectado</span>
-      <button id="mute-btn" class="small" disabled>🎙️ Microfone ligado</button>
-      <button id="leave-btn" class="small danger">Sair da call</button>
+    <div class="right">
+      <span id="conn-status" class="tag bad"><span class="dot"></span><span>Desconectado</span></span>
+      <span id="share-controls" class="inline hidden">
+        <select id="share-target" title="Compartilhar com" style="width:auto"></select>
+        <button id="share-btn" class="sm"><i data-icon="screen" data-size="16"></i><span>Compartilhar tela</span></button>
+      </span>
+      <button id="mute-btn" class="sm" disabled></button>
+      <button id="leave-btn" class="sm danger">Sair da call</button>
     </div>
   </header>
 
   <main class="room-layout">
-    <section>
+    <section class="room-main">
+      <div id="stage" class="stage hidden">
+        <div id="stage-media" style="height:100%"></div>
+        <div class="caption" id="stage-caption"></div>
+        <span class="stage-label tag" id="stage-label"></span>
+        <div class="stage-tools">
+          <button id="stage-full" class="sm icon-only" title="Tela cheia"><i data-icon="expand" data-size="16"></i></button>
+        </div>
+      </div>
       <div id="master-row" class="master-row"></div>
       <div id="zones" class="zones"></div>
     </section>
+
     <aside class="side">
-      <div id="talk-status" class="talk-status">
-        <div class="label" id="talk-label">Você está falando com</div>
+      <div id="talk-status" class="status-box">
+        <div class="eyebrow" id="talk-label">Você está falando com</div>
         <div class="value" id="talk-value">—</div>
         <div class="hint" id="talk-hint"></div>
       </div>
-      <div id="master-panel" class="card hidden">
-        <h3>Falar com…</h3>
-        <div id="targets" class="target-list"></div>
-        <p class="hint" style="margin-top:0.75rem"><kbd>Esc</kbd> volta a falar com todos.</p>
-        <h3 style="margin-top:1rem">Novo ambiente</h3>
-        <form id="zone-form" class="inline-form">
-          <input id="zone-name" maxlength="40" placeholder="Ex.: Floresta" required>
-          <button type="submit" class="primary small">Criar</button>
-        </form>
-        <p class="hint" style="margin-top:0.5rem">Arraste os jogadores entre os ambientes (ou use o seletor no card).</p>
+
+      <div id="master-panel" class="panel hidden">
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="voz" aria-selected="true">Voz</button>
+          <button role="tab" data-tab="cena" aria-selected="false">Cena</button>
+          <button role="tab" data-tab="sons" aria-selected="false">Sons</button>
+        </div>
+
+        <div data-panel="voz">
+          <div id="targets" class="list"></div>
+          <p class="hint" style="margin-top:0.75rem"><kbd>Esc</kbd> volta a falar com todos.</p>
+          <hr class="divider">
+          <p class="eyebrow">Novo ambiente</p>
+          <form id="zone-form" class="inline" onsubmit="return false">
+            <input id="zone-name" maxlength="40" placeholder="Floresta" required>
+            <button type="submit" class="primary sm">Criar</button>
+          </form>
+          <p class="hint" style="margin-top:0.5rem">Arraste jogadores entre os ambientes ou use o seletor no card.</p>
+        </div>
+
+        <div data-panel="cena" hidden>
+          <label for="scene-dest" style="margin-top:0">Mostrar para</label>
+          <select id="scene-dest"></select>
+          <label>Imagem ou vídeo</label>
+          <div id="scene-visuals" class="thumbs"></div>
+          <label for="scene-caption">Texto na tela</label>
+          <input id="scene-caption" maxlength="200" placeholder="Uma névoa fria cobre as árvores">
+          <label for="scene-ambient">Som ambiente (em loop)</label>
+          <select id="scene-ambient"></select>
+          <div class="inline" style="align-items:center;margin-top:0.6rem">
+            <span class="hint">Volume</span>
+            <input type="range" id="scene-volume" min="0" max="1" step="0.05" value="0.6">
+          </div>
+          <div class="inline" style="margin-top:1rem">
+            <button id="scene-apply" class="primary">Aplicar cena</button>
+            <button id="scene-clear">Limpar</button>
+          </div>
+          <hr class="divider">
+          <div class="upload-row">
+            <p class="eyebrow" style="margin:0;flex:1">Biblioteca</p>
+            <label class="btn sm" for="media-input" style="margin:0"><i data-icon="upload" data-size="15"></i>Enviar arquivos</label>
+            <input type="file" id="media-input" multiple accept="image/*,video/*,audio/*" hidden>
+          </div>
+          <p class="hint" id="upload-status">Imagens, vídeos e áudios de até 50 MB.</p>
+          <div id="media-list" class="media-list"></div>
+        </div>
+
+        <div data-panel="sons" hidden>
+          <label for="sfx-target" style="margin-top:0">Tocar para</label>
+          <select id="sfx-target"></select>
+          <div id="sfx-grid" class="sfx-grid" style="margin-top:0.75rem"></div>
+          <button id="sfx-stop" class="sm" style="margin-top:0.75rem;width:100%"><i data-icon="stop" data-size="14"></i>Parar efeitos</button>
+          <p class="hint" style="margin-top:0.6rem">Os áudios enviados na aba Cena aparecem aqui.</p>
+        </div>
       </div>
-      <div id="player-panel" class="card hidden">
-        <h3>Falar só com o mestre</h3>
-        <button id="whisper-btn" class="hold-btn">🤫 Segure para sussurrar</button>
+
+      <div id="player-panel" class="panel hidden">
+        <p class="eyebrow">Falar só com o mestre</p>
+        <button id="whisper-btn" class="hold-btn"><i data-icon="whisper" data-size="16"></i><span>Segure para sussurrar</span></button>
         <p class="hint" style="margin-top:0.5rem">Ou segure <kbd>V</kbd>. Enquanto segura, só o mestre te ouve.</p>
-        <h3 style="margin-top:1rem">Você está ouvindo</h3>
-        <div id="hearing" class="small muted">—</div>
+        <hr class="divider">
+        <p class="eyebrow">Você está ouvindo</p>
+        <div id="hearing" class="small">—</div>
+        <hr class="divider">
+        <p class="eyebrow">Volume da cena e dos efeitos</p>
+        <input type="range" id="player-scene-volume" min="0" max="1" step="0.05" value="1">
       </div>
     </aside>
   </main>
 
-  <div id="join-overlay" class="join-overlay">
-    <div class="card">
+  <div id="join-overlay" class="overlay">
+    <div class="panel">
       <h2 id="overlay-title">Pronto para a sessão?</h2>
-      <p class="muted" id="overlay-text">Vamos pedir acesso ao seu microfone para entrar na call.</p>
-      <button id="join-btn" class="primary">🎙️ Entrar na call</button>
+      <p class="muted" id="overlay-text">O navegador vai pedir acesso ao microfone.</p>
+      <button id="join-btn" class="primary">Entrar na call</button>
       <div class="error" id="join-error"></div>
     </div>
   </div>
