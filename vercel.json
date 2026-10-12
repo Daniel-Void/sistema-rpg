@@ -5,7 +5,7 @@
   "installCommand": "",
   "outputDirectory": "public",
   "cleanUrls": true,
-  "rewrites": [{ "source": "/sala/:id", "destination": "/room.html" }],
+  "rewrites": [{ "source": "/sala/:id", "destination": "/room" }],
   "headers": [
     {
       "source": "/(.*)",
