@@ -1,6 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const { canHear, computeRouting, normalizeMasterTarget } = require('../server/audioRules');
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { canHear, computeRouting, normalizeMasterTarget } from '../public/js/audioRules.js';
 
 const FOGUEIRA = 1;
 const FLORESTA = 2;

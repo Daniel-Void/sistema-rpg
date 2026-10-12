@@ -24,7 +24,7 @@
     <div class="grid-2">
       <section class="card" id="create-card">
         <h2>Criar nova sala</h2>
-        <form id="create-form">
+        <form id="create-form" onsubmit="return false">
           <label for="room-name">Nome da sala</label>
           <input id="room-name" maxlength="60" required placeholder="Ex.: A Maldição de Strahd">
           <label for="room-desc">Descrição (opcional)</label>
@@ -36,7 +36,7 @@
       <section class="card">
         <h2>Entrar com código</h2>
         <p class="muted small">Peça o código de convite para o mestre da mesa.</p>
-        <form id="join-form">
+        <form id="join-form" onsubmit="return false">
           <label for="join-code">Código de convite</label>
           <input id="join-code" maxlength="16" required placeholder="Ex.: K7M2QX" style="text-transform:uppercase">
           <button type="submit" class="primary" style="margin-top:1rem">Entrar na sala</button>

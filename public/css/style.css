@@ -85,6 +85,7 @@ label { display: block; font-size: 0.85rem; color: var(--muted); margin: 0.75rem
   box-shadow: var(--shadow);
 }
 
+.notice { margin-top: 0.75rem; padding: 0.75rem; border-radius: 10px; background: #1f2a1c; border: 1px solid #3d5a34; color: #cfe8c4; font-size: 0.9rem; }
 .error { color: var(--danger); min-height: 1.2em; font-size: 0.9rem; margin-top: 0.6rem; }
 
 /* ---------- Login ---------- */

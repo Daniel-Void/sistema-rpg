@@ -24,16 +24,16 @@
         <button type="button" id="tab-register">Criar conta</button>
       </div>
 
-      <form id="login-form">
-        <label for="login-username">Usuário</label>
-        <input id="login-username" name="username" autocomplete="username" required>
+      <form id="login-form" onsubmit="return false">
+        <label for="login-email">E-mail</label>
+        <input id="login-email" name="email" type="email" autocomplete="email" required>
         <label for="login-password">Senha</label>
         <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <button type="submit" class="primary">Entrar</button>
         <div class="error" id="login-error"></div>
       </form>
 
-      <form id="register-form" class="hidden">
+      <form id="register-form" class="hidden" onsubmit="return false">
         <label>Eu sou</label>
         <div class="role-picker">
           <input type="radio" name="role" id="role-mestre" value="mestre">
@@ -42,13 +42,14 @@
           <label for="role-jogador"><span>🗡️</span>Jogador</label>
         </div>
         <label for="reg-display">Nome exibido</label>
-        <input id="reg-display" name="displayName" maxlength="40" placeholder="Como os outros vão te ver">
-        <label for="reg-username">Usuário</label>
-        <input id="reg-username" name="username" autocomplete="username" required minlength="3" maxlength="32">
+        <input id="reg-display" name="displayName" maxlength="40" required placeholder="Como os outros vão te ver">
+        <label for="reg-email">E-mail</label>
+        <input id="reg-email" name="email" type="email" autocomplete="email" required>
         <label for="reg-password">Senha</label>
         <input id="reg-password" name="password" type="password" autocomplete="new-password" required minlength="6">
         <button type="submit" class="primary">Criar conta</button>
         <div class="error" id="register-error"></div>
+        <div class="notice hidden" id="register-notice"></div>
       </form>
     </div>
   </main>

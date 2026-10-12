@@ -1,4 +1,6 @@
-import { api, currentUser, escapeHtml, initials, toast } from './api.js';
+import { supabase, currentUser, escapeHtml, friendlyError, initials, toast } from './supabase.js';
+import { ICE_SERVERS } from './config.js';
+import { computeRouting, normalizeMasterTarget } from './audioRules.js';
 
 const roomId = Number(location.pathname.split('/').filter(Boolean).pop());
 const $ = (id) => document.getElementById(id);
@@ -6,40 +8,23 @@ const $ = (id) => document.getElementById(id);
 const user = await currentUser();
 if (!user) location.replace(`/?next=${encodeURIComponent(location.pathname)}`);
 
-let roomInfo;
-try {
-  roomInfo = await api(`/rooms/${roomId}`);
-} catch (err) {
-  $('overlay-title').textContent = 'Sala indisponível';
-  $('overlay-text').textContent = err.message;
-  $('join-btn').textContent = 'Voltar ao painel';
-  $('join-btn').onclick = () => location.replace('/painel');
-  throw err;
-}
-const { iceServers } = await api('/config');
-
-const isMaster = roomInfo.isMaster;
-document.title = `${roomInfo.room.name} — Sistema RPG`;
-$('room-name').textContent = roomInfo.room.name;
-if (isMaster) {
-  $('invite').classList.remove('hidden');
-  $('invite-code').textContent = roomInfo.room.inviteCode;
-  $('invite').title = 'Clique para copiar';
-  $('invite').style.cursor = 'pointer';
-  $('invite').onclick = () => navigator.clipboard.writeText(roomInfo.room.inviteCode).then(() => toast('Código copiado!'));
-}
-$(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
+// Identifica esta aba. Se o mesmo usuário abrir a sala em outra aba, a mais nova assume.
+const sessionId = crypto.randomUUID();
+const joinedAt = Date.now();
 
 // ---------------------------------------------------------------------------
 // Estado
 // ---------------------------------------------------------------------------
 
-let socket = null;
+let db = null; // { room, zones, members, inviteCode } vindo do banco
+let online = new Map(); // userId -> { sessionId, joinedAt, muted } (presença na call)
+let state = null; // visão calculada para renderizar e rotear
+let channel = null;
+let inCall = false;
 let localStream = null;
 let micTrack = null;
 let audioCtx = null;
 let muted = false;
-let state = null; // último 'state' recebido do servidor
 const peers = new Map(); // userId -> peer
 const analysers = new Map(); // userId -> AnalyserNode
 const speaking = new Set();
@@ -52,6 +37,7 @@ try {
   zoneVolumes = {};
 }
 
+let isMaster = false;
 const emptyRouting = { sendTo: [], hearFrom: [] };
 const routing = () => (state && state.routing) || emptyRouting;
 const playerById = (id) => state && state.players.find((p) => p.userId === id);
@@ -61,22 +47,211 @@ function nameOf(id) {
   const p = playerById(id);
   return p ? p.displayName : 'Alguém';
 }
-/** Ambiente efetivo do jogador (sem ambiente cai no primeiro). */
-const zoneOf = (p) => (zoneById(p.zoneId) ? p.zoneId : state.zones[0] && state.zones[0].id);
 
 // ---------------------------------------------------------------------------
-// WebRTC (malha P2P com "perfect negotiation")
+// Dados do banco
 // ---------------------------------------------------------------------------
 
-function send(to, data) {
-  socket.emit('signal', { to, data });
+async function loadData() {
+  const [roomRes, zonesRes, membersRes] = await Promise.all([
+    supabase.from('rooms').select('id, name, description, master_id, master_target, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)').eq('id', roomId).maybeSingle(),
+    supabase.from('zones').select('id, name, position').eq('room_id', roomId).eq('archived', false).order('position').order('id'),
+    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, profile:profiles(display_name)').eq('room_id', roomId),
+  ]);
+  const error = roomRes.error || zonesRes.error || membersRes.error;
+  if (error) throw error;
+  return roomRes.data ? { room: roomRes.data, zones: zonesRes.data, members: membersRes.data } : null;
 }
 
-function createPeer(peerId, initiator) {
-  const pc = new RTCPeerConnection({ iceServers });
+let refreshTimer = null;
+let refreshing = Promise.resolve();
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshing = refreshing.then(refresh).catch((err) => console.error('refresh', err));
+  }, 40);
+}
+
+async function refresh() {
+  const data = await loadData();
+  if (!data) return handleRemoved('A sala foi excluída ou você não faz mais parte dela.');
+  if (data.room.master_id !== user.id && !data.members.some((m) => m.user_id === user.id)) {
+    return handleRemoved('Você foi removido da sala pelo mestre.');
+  }
+  db = data;
+  recompute();
+}
+
+/** Junta banco + presença, calcula as regras de áudio e atualiza a tela e as conexões. */
+function recompute() {
+  if (!db) return;
+  const zones = db.zones;
+  const zoneIds = zones.map((z) => z.id);
+  const effectiveZone = (zoneId) => (zoneIds.includes(zoneId) ? zoneId : zoneIds[0] ?? null);
+  const masterId = db.room.master_id;
+  const masterOnline = online.get(masterId);
+
+  const players = db.members
+    .map((m) => {
+      const presence = online.get(m.user_id);
+      return {
+        userId: m.user_id,
+        displayName: (m.profile && m.profile.display_name) || 'Jogador',
+        zoneId: effectiveZone(m.zone_id),
+        online: Boolean(presence),
+        muted: presence ? presence.muted : false,
+        whisperToMaster: m.whisper_to_master,
+      };
+    })
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, 'pt-BR'));
+
+  const masterTarget = normalizeMasterTarget(db.room.master_target, { zoneIds, playerIds: players.map((p) => p.userId) });
+
+  const participants = new Map();
+  if (masterOnline) participants.set(masterId, { role: 'mestre', zoneId: null });
+  for (const p of players) if (p.online) participants.set(p.userId, { role: 'jogador', zoneId: p.zoneId, whisperToMaster: p.whisperToMaster });
+
+  const allRouting = computeRouting({ participants, masterTarget });
+  const myRouting = allRouting[user.id] || emptyRouting;
+  const masterSpeaksToMe = Boolean(masterOnline && allRouting[masterId] && allRouting[masterId].sendTo.includes(user.id));
+
+  state = {
+    zones,
+    players,
+    master: { userId: masterId, displayName: (db.room.master && db.room.master.display_name) || 'Mestre', online: Boolean(masterOnline), muted: masterOnline ? masterOnline.muted : false },
+    // Para jogadores, o alvo do mestre só aparece quando inclui eles.
+    masterTarget: isMaster || masterSpeaksToMe ? masterTarget : null,
+    routing: inCall ? myRouting : emptyRouting,
+  };
+
+  render();
+  if (inCall) {
+    reconcilePeers();
+    applyAllRouting();
+  }
+}
+
+function handleRemoved(reason) {
+  stopCall();
+  showOverlay('Você saiu da sala', reason, 'Voltar ao painel', () => location.replace('/painel'));
+}
+
+// ---------------------------------------------------------------------------
+// Realtime: presença (quem está na call) + mudanças no banco + sinalização
+// ---------------------------------------------------------------------------
+
+function connectRealtime() {
+  return new Promise((resolve, reject) => {
+    channel = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: sessionId } } });
+    const onChange = () => scheduleRefresh();
+    channel
+      // Atualizações frequentes (alvo do mestre, mover jogador, sussurro) são aplicadas na hora, sem recarregar.
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, ({ new: row }) => {
+        if (db && row) db.room.master_target = row.master_target;
+        recompute();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, ({ new: row }) => {
+        const member = db && row && db.members.find((m) => m.user_id === row.user_id);
+        if (!member) return onChange();
+        member.zone_id = row.zone_id;
+        member.whisper_to_master = row.whisper_to_master;
+        recompute();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, onChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'zones', filter: `room_id=eq.${roomId}` }, onChange)
+      // Exclusões não aceitam filtro: qualquer exclusão nessas tabelas faz recarregar.
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'room_members' }, onChange)
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, onChange)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals', filter: `to_user=eq.${user.id}` }, ({ new: row }) => onSignalRow(row))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'signals', filter: `to_user=eq.${user.id}` }, ({ new: row }) => onSignalRow(row))
+      .on('presence', { event: 'sync' }, onPresenceSync)
+      .subscribe(async (status, err) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ userId: user.id, joinedAt, muted });
+          scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto conectava
+          resolve();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          updateConnStatus(false);
+          reject(err || new Error(status));
+        } else if (status === 'CLOSED') {
+          updateConnStatus(false);
+        }
+      });
+  });
+}
+
+function onPresenceSync() {
+  // presenceState(): { <sessionId da aba>: [{ userId, joinedAt, muted }] }
+  const next = new Map();
+  for (const [key, metas] of Object.entries(channel.presenceState())) {
+    for (const m of metas) {
+      if (!m.userId) continue;
+      const entry = { sessionId: key, joinedAt: m.joinedAt || 0, muted: Boolean(m.muted) };
+      const current = next.get(m.userId);
+      // Se o mesmo usuário estiver em duas abas, vale a mais recente
+      if (!current || entry.joinedAt > current.joinedAt) next.set(m.userId, entry);
+    }
+  }
+  const mine = next.get(user.id);
+  if (mine && mine.sessionId !== sessionId && mine.joinedAt > joinedAt) {
+    handleRemoved('Você entrou nesta sala em outra aba.');
+    return;
+  }
+  online = next;
+  updateConnStatus(true);
+  recompute();
+}
+
+// ---------------------------------------------------------------------------
+// WebRTC (malha P2P com "perfect negotiation"; sinais vão pelo banco)
+// ---------------------------------------------------------------------------
+
+async function sendSignal(peer, data) {
+  peer.seq += 1;
+  const { error } = await supabase.from('signals').upsert(
+    { room_id: roomId, from_session: sessionId, to_user: peer.id, to_session: peer.sessionId, payload: { ...data, seq: peer.seq } },
+    { onConflict: 'from_session,to_session' },
+  );
+  if (error) console.error('signal', error);
+}
+
+/** Espera o navegador reunir os candidatos de rede, para mandar tudo numa mensagem só. */
+function waitForIce(pc, timeout = 2500) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      clearTimeout(timer);
+      resolve();
+    };
+    const check = () => pc.iceGatheringState === 'complete' && done();
+    const timer = setTimeout(done, timeout);
+    pc.addEventListener('icegatheringstatechange', check);
+  });
+}
+
+async function sendDescription(peer) {
+  await waitForIce(peer.pc);
+  await sendSignal(peer, { description: peer.pc.localDescription.toJSON() });
+}
+
+function createPeer(peerId, peerSession, initiator) {
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const audio = new Audio();
   audio.autoplay = true;
-  const peer = { id: peerId, pc, audio, polite: !initiator, makingOffer: false, ignoreOffer: false, transceiver: null, queue: Promise.resolve() };
+  const peer = {
+    id: peerId,
+    sessionId: peerSession,
+    pc,
+    audio,
+    polite: !initiator,
+    makingOffer: false,
+    ignoreOffer: false,
+    transceiver: null,
+    seq: 0,
+    lastSeq: 0,
+    queue: Promise.resolve(),
+  };
   peers.set(peerId, peer);
 
   if (initiator) peer.transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
@@ -89,12 +264,11 @@ function createPeer(peerId, initiator) {
     watchLevel(peerId, stream);
     applyPeerRouting(peer);
   };
-  pc.onicecandidate = ({ candidate }) => candidate && send(peerId, { candidate });
   pc.onnegotiationneeded = async () => {
     try {
       peer.makingOffer = true;
       await pc.setLocalDescription();
-      send(peerId, { description: pc.localDescription });
+      await sendDescription(peer);
     } catch (err) {
       console.error('negotiation', err);
     } finally {
@@ -103,7 +277,7 @@ function createPeer(peerId, initiator) {
   };
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'failed') pc.restartIce();
-    updateConnStatus();
+    updateConnStatus(true);
   };
 
   applyPeerRouting(peer);
@@ -118,51 +292,70 @@ function closePeer(peerId) {
   peers.delete(peerId);
   analysers.delete(peerId);
   speaking.delete(peerId);
-  updateConnStatus();
 }
 
 function closeAllPeers() {
   for (const id of [...peers.keys()]) closePeer(id);
 }
 
-function handleSignal({ from, data }) {
-  const peer = peers.get(from) || createPeer(from, false);
-  // Processa os sinais de cada peer em ordem, um de cada vez.
-  peer.queue = peer.queue.then(async () => {
-    const { pc } = peer;
-    try {
-      if (data.description) {
-        const collision = data.description.type === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
-        peer.ignoreOffer = !peer.polite && collision;
-        if (peer.ignoreOffer) return;
-        await pc.setRemoteDescription(data.description);
-        if (data.description.type === 'offer') {
-          const t = pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'audio');
-          if (t) {
-            peer.transceiver = t;
-            t.direction = 'sendrecv';
-          }
-          await applyPeerRouting(peer);
-          await pc.setLocalDescription();
-          send(from, { description: pc.localDescription });
-        }
-      } else if (data.candidate) {
-        try {
-          await pc.addIceCandidate(data.candidate);
-        } catch (err) {
-          if (!peer.ignoreOffer) throw err;
-        }
-      }
-    } catch (err) {
-      console.error('signal', err);
+/** Quem é participante válido da sala (mestre ou membro) segundo o banco. */
+function isParticipant(userId) {
+  return db && (db.room.master_id === userId || db.members.some((m) => m.user_id === userId));
+}
+
+/** Abre/fecha conexões conforme quem está na call. Quem entrou por último inicia. */
+function reconcilePeers() {
+  for (const [peerId, peer] of peers) {
+    const presence = online.get(peerId);
+    if (!presence || presence.sessionId !== peer.sessionId || !isParticipant(peerId)) closePeer(peerId);
+  }
+  for (const [peerId, presence] of online) {
+    if (peerId === user.id || peers.has(peerId) || !isParticipant(peerId) || !presence.sessionId) continue;
+    const iStart = joinedAt > presence.joinedAt || (joinedAt === presence.joinedAt && sessionId > presence.sessionId);
+    if (iStart) createPeer(peerId, presence.sessionId, true);
+  }
+  updateConnStatus(true);
+}
+
+function onSignalRow(row) {
+  if (!inCall || !row || row.to_session !== sessionId || !isParticipant(row.from_user)) return;
+  let peer = peers.get(row.from_user);
+  if (peer && peer.sessionId !== row.from_session) {
+    closePeer(row.from_user);
+    peer = null;
+  }
+  if (!peer) peer = createPeer(row.from_user, row.from_session, false);
+  const data = row.payload || {};
+  if (typeof data.seq === 'number') {
+    if (data.seq <= peer.lastSeq) return; // mensagem velha ou repetida
+    peer.lastSeq = data.seq;
+  }
+  peer.queue = peer.queue.then(() => handleDescription(peer, data.description)).catch((err) => console.error('signal', err));
+}
+
+async function handleDescription(peer, description) {
+  if (!description) return;
+  const { pc } = peer;
+  const collision = description.type === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
+  peer.ignoreOffer = !peer.polite && collision;
+  if (peer.ignoreOffer) return;
+  await pc.setRemoteDescription(description);
+  if (description.type === 'offer') {
+    const t = pc.getTransceivers().find((tr) => tr.receiver.track.kind === 'audio');
+    if (t) {
+      peer.transceiver = t;
+      t.direction = 'sendrecv';
     }
-  });
+    await applyPeerRouting(peer);
+    await pc.setLocalDescription();
+    await sendDescription(peer);
+  }
 }
 
 /**
  * Aplica as regras de áudio a uma conexão:
- *  - só ENVIA o microfone se o servidor disse que esse peer pode nos ouvir;
- *  - só TOCA o áudio recebido se o servidor disse que podemos ouvir esse peer.
+ *  - só ENVIA o microfone se as regras dizem que esse peer pode nos ouvir;
+ *  - só TOCA o áudio recebido se as regras dizem que podemos ouvir esse peer.
  */
 async function applyPeerRouting(peer) {
   const r = routing();
@@ -183,7 +376,7 @@ function volumeFor(userId) {
   if (!isMaster || !state) return 1;
   const p = playerById(userId);
   if (!p) return 1;
-  const v = zoneVolumes[zoneOf(p)];
+  const v = zoneVolumes[p.zoneId];
   return typeof v === 'number' ? v : 1;
 }
 
@@ -228,12 +421,12 @@ setInterval(() => {
     }
   }
   if (changed) {
-    document.querySelectorAll('.person[data-user]').forEach((el) => el.classList.toggle('speaking', speaking.has(Number(el.dataset.user))));
+    document.querySelectorAll('.person[data-user]').forEach((el) => el.classList.toggle('speaking', speaking.has(el.dataset.user)));
   }
 }, 120);
 
 // ---------------------------------------------------------------------------
-// Socket / ciclo da call
+// Ciclo da call
 // ---------------------------------------------------------------------------
 
 async function startCall() {
@@ -253,50 +446,31 @@ async function startCall() {
   micTrack = localStream.getAudioTracks()[0];
   audioCtx = new AudioContext();
   watchLevel(user.id, localStream);
+  inCall = true;
+  try {
+    await connectRealtime();
+  } catch (err) {
+    console.error(err);
+    stopCall();
+    $('join-btn').disabled = false;
+    $('join-error').textContent = 'Não foi possível conectar à sala em tempo real. Tente novamente.';
+    return;
+  }
   $('join-overlay').classList.add('hidden');
   $('mute-btn').disabled = false;
-
-  socket = io();
-  socket.on('connect', () => {
-    closeAllPeers();
-    socket.emit('join', { roomId }, (res) => {
-      if (res.error) return showOverlay('Não foi possível entrar', res.error);
-      for (const peerId of res.peers) createPeer(peerId, true);
-      if (muted) socket.emit('mute', { muted: true });
-      updateConnStatus();
-    });
-  });
-  socket.on('disconnect', () => {
-    closeAllPeers();
-    updateConnStatus();
-  });
-  socket.on('connect_error', (err) => {
-    if (err.message === 'unauthorized') location.replace(`/?next=${encodeURIComponent(location.pathname)}`);
-  });
-  socket.on('peer-joined', ({ userId }) => closePeer(userId)); // quem entrou inicia a conexão
-  socket.on('peer-left', ({ userId }) => closePeer(userId));
-  socket.on('signal', handleSignal);
-  socket.on('state', (msg) => {
-    state = msg;
-    render();
-    applyAllRouting();
-  });
-  socket.on('kicked', ({ reason }) => {
-    stopCall();
-    showOverlay('Você saiu da call', reason, 'Voltar ao painel', () => location.replace('/painel'));
-  });
 }
 
 function stopCall() {
-  if (socket) {
-    socket.off();
-    socket.disconnect();
-    socket = null;
+  inCall = false;
+  if (channel) {
+    supabase.removeChannel(channel);
+    channel = null;
   }
   closeAllPeers();
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
-  if (audioCtx) audioCtx.close();
+  if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
   analysers.clear();
+  updateConnStatus(false);
 }
 
 function showOverlay(title, text, buttonText, onClick) {
@@ -310,20 +484,19 @@ function showOverlay(title, text, buttonText, onClick) {
   $('join-overlay').classList.remove('hidden');
 }
 
-function updateConnStatus() {
+function updateConnStatus(connected) {
   const el = $('conn-status');
-  if (!socket || !socket.connected) {
+  if (!connected || !inCall) {
     el.textContent = '● Desconectado';
     el.style.color = 'var(--danger)';
     return;
   }
   const total = peers.size;
-  const connected = [...peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
-  el.textContent = total ? `● ${connected}/${total} conectados` : '● Na call';
-  el.style.color = connected === total ? 'var(--ok)' : 'var(--accent)';
+  const ok = [...peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
+  el.textContent = total ? `● ${ok}/${total} conectados` : '● Na call';
+  el.style.color = ok === total ? 'var(--ok)' : 'var(--accent)';
 }
 
-$('join-btn').onclick = startCall;
 $('leave-btn').onclick = () => {
   stopCall();
   location.href = '/painel';
@@ -333,23 +506,34 @@ $('mute-btn').onclick = () => {
   if (micTrack) micTrack.enabled = !muted;
   $('mute-btn').textContent = muted ? '🔇 Microfone mudo' : '🎙️ Microfone ligado';
   $('mute-btn').classList.toggle('active', muted);
-  if (socket) socket.emit('mute', { muted });
+  if (channel) channel.track({ userId: user.id, joinedAt, muted });
 };
+window.addEventListener('pagehide', () => {
+  if (channel) channel.untrack();
+});
+
+async function rpc(name, params) {
+  const { error } = await supabase.rpc(name, { p_room_id: roomId, ...params });
+  if (error) {
+    toast(friendlyError(error));
+    scheduleRefresh();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Controles do mestre
 // ---------------------------------------------------------------------------
 
 function setTarget(target) {
-  socket && socket.emit('master:target', { target });
+  rpc('set_master_target', { p_target: target });
 }
 
-if (isMaster) {
+function setupMasterControls() {
   $('zone-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const name = $('zone-name').value.trim();
-    if (!name || !socket) return;
-    socket.emit('zone:create', { name });
+    if (!name) return;
+    rpc('create_zone', { p_name: name });
     $('zone-name').value = '';
   });
 
@@ -365,21 +549,21 @@ if (isMaster) {
   const zonesEl = $('zones');
   zonesEl.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
-    if (!btn || !socket) return;
+    if (!btn) return;
     const zoneId = Number(btn.dataset.zone);
     if (btn.dataset.action === 'narrate') setTarget({ type: 'zone', zoneId });
-    if (btn.dataset.action === 'whisper') setTarget({ type: 'player', userId: Number(btn.dataset.user) });
+    if (btn.dataset.action === 'whisper') setTarget({ type: 'player', userId: btn.dataset.user });
     if (btn.dataset.action === 'rename') {
       const name = prompt('Novo nome do ambiente:', zoneById(zoneId).name);
-      if (name && name.trim()) socket.emit('zone:rename', { zoneId, name });
+      if (name && name.trim()) rpc('rename_zone', { p_zone_id: zoneId, p_name: name.trim() });
     }
     if (btn.dataset.action === 'delete' && confirm('Excluir este ambiente? Os jogadores nele vão para outro ambiente.')) {
-      socket.emit('zone:delete', { zoneId });
+      rpc('archive_zone', { p_zone_id: zoneId });
     }
   });
   zonesEl.addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-move]');
-    if (sel && socket) socket.emit('master:move', { userId: Number(sel.dataset.move), zoneId: Number(sel.value) });
+    if (sel) rpc('move_player', { p_user_id: sel.dataset.move, p_zone_id: Number(sel.value) });
   });
   zonesEl.addEventListener('input', (e) => {
     const range = e.target.closest('input[data-volume]');
@@ -413,8 +597,8 @@ if (isMaster) {
     if (!zone) return;
     e.preventDefault();
     zone.classList.remove('drop-hover');
-    const userId = Number(e.dataTransfer.getData('text/plain'));
-    if (userId && socket) socket.emit('master:move', { userId, zoneId: Number(zone.dataset.zone) });
+    const userId = e.dataTransfer.getData('text/plain');
+    if (userId) rpc('move_player', { p_user_id: userId, p_zone_id: Number(zone.dataset.zone) });
   });
 }
 
@@ -422,14 +606,14 @@ if (isMaster) {
 // Sussurro do jogador para o mestre (segurar botão ou tecla V)
 // ---------------------------------------------------------------------------
 
-if (!isMaster) {
+function setupPlayerControls() {
   let whispering = false;
   const setWhisper = (active) => {
-    if (active === whispering || !socket) return;
+    if (active === whispering || !inCall) return;
     whispering = active;
     $('whisper-btn').classList.toggle('holding', active);
     $('whisper-btn').textContent = active ? '🤫 Sussurrando para o mestre…' : '🤫 Segure para sussurrar';
-    socket.emit('player:whisper', { active });
+    rpc('set_whisper', { p_active: active });
   };
   const btn = $('whisper-btn');
   btn.addEventListener('pointerdown', (e) => {
@@ -451,30 +635,31 @@ if (!isMaster) {
 // Renderização
 // ---------------------------------------------------------------------------
 
-function personHtml({ userId, displayName, online, muted: isMuted, whisperToMaster, master, zoneId }) {
+function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, master, zoneId }) {
   const me = userId === user.id;
   const draggable = isMaster && !master;
   const zoneOptions =
     draggable && state.zones.length > 1
-      ? `<select data-move="${userId}" title="Mover para…">${state.zones
+      ? `<select data-move="${escapeHtml(userId)}" title="Mover para…">${state.zones
           .map((z) => `<option value="${z.id}" ${z.id === zoneId ? 'selected' : ''}>${escapeHtml(z.name)}</option>`)
           .join('')}</select>`
       : '';
   const whisperBtn =
-    isMaster && !master && online
-      ? `<button class="small ghost ${isWhisperTarget(userId) ? 'active' : ''}" data-action="whisper" data-user="${userId}" title="Falar só com este jogador">🤫</button>`
+    isMaster && !master && isOnline
+      ? `<button class="small ghost ${isWhisperTarget(userId) ? 'active' : ''}" data-action="whisper" data-user="${escapeHtml(userId)}" title="Falar só com este jogador">🤫</button>`
       : '';
+  const sub = master ? (isOnline ? 'Mestre · na call' : 'Mestre · fora da call') : isOnline ? 'Na call' : 'Offline';
   return `
-    <div class="person ${online ? '' : 'offline'} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
-         data-user="${userId}" ${draggable ? 'draggable="true"' : ''}>
+    <div class="person ${isOnline ? '' : 'offline'} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
+         data-user="${escapeHtml(userId)}" ${draggable ? 'draggable="true"' : ''}>
       <div class="avatar">${master ? '🧙' : escapeHtml(initials(displayName))}</div>
       <div class="info">
         <div class="name">${escapeHtml(displayName)}${me ? ' <span class="muted">(você)</span>' : ''}</div>
-        <div class="sub">${master ? 'Mestre' : online ? 'Na call' : 'Offline'}</div>
+        <div class="sub">${sub}</div>
       </div>
       <div class="badges">
         ${isMuted ? '<span class="badge muted-mic" title="Microfone mudo">🔇</span>' : ''}
-        ${whisperToMaster ? '<span class="badge whisper">sussurrando</span>' : ''}
+        ${whisperToMaster && isOnline ? '<span class="badge whisper">sussurrando</span>' : ''}
       </div>
       ${zoneOptions || whisperBtn ? `<div class="controls">${zoneOptions}${whisperBtn}</div>` : ''}
     </div>`;
@@ -486,15 +671,13 @@ const isZoneTarget = (zoneId) => state.masterTarget && state.masterTarget.type =
 function render() {
   if (!state) return;
   const me = playerById(user.id);
-  const myZone = me ? zoneOf(me) : null;
+  const myZone = me ? me.zoneId : null;
 
-  $('master-row').innerHTML = state.master
-    ? personHtml({ ...state.master, online: true, master: true })
-    : '<div class="person offline"><div class="avatar">🧙</div><div class="info"><div class="name">Mestre</div><div class="sub">Ainda não entrou na call</div></div></div>';
+  $('master-row').innerHTML = personHtml({ ...state.master, master: true });
 
   $('zones').innerHTML = state.zones
     .map((zone) => {
-      const members = state.players.filter((p) => zoneOf(p) === zone.id);
+      const members = state.players.filter((p) => p.zoneId === zone.id);
       const vol = typeof zoneVolumes[zone.id] === 'number' ? zoneVolumes[zone.id] : 1;
       return `
       <div class="zone ${zone.id === myZone ? 'mine' : ''} ${isZoneTarget(zone.id) ? 'narrating' : ''}" data-zone="${zone.id}">
@@ -526,12 +709,12 @@ function render() {
     })
     .join('');
 
-  renderTalkStatus(me, myZone);
+  renderTalkStatus(myZone);
   if (isMaster) renderTargets();
   else renderHearing();
 }
 
-function renderTalkStatus(me, myZone) {
+function renderTalkStatus(myZone) {
   const box = $('talk-status');
   const target = state.masterTarget;
   let label;
@@ -552,13 +735,13 @@ function renderTalkStatus(me, myZone) {
     }
   } else {
     label = 'O mestre está falando com';
-    const zoneName = myZone ? zoneById(myZone).name : '—';
-    if (!state.master) value = 'Mestre fora da call';
+    const zoneName = myZone != null && zoneById(myZone) ? zoneById(myZone).name : '—';
+    if (!state.master.online) value = 'Mestre fora da call';
     else if (!target) {
       value = 'Outro ambiente';
       hint = 'Você não está ouvindo o mestre agora.';
     } else if (target.type === 'all') value = '📣 Todos';
-    else if (target.type === 'zone') value = `📢 Seu ambiente`;
+    else if (target.type === 'zone') value = '📢 Seu ambiente';
     else {
       value = '🤫 Você, em particular';
       whisper = true;
@@ -575,22 +758,52 @@ function renderTargets() {
   const t = state.masterTarget || { type: 'all' };
   const btn = (target, text, active) =>
     `<button class="small ${active ? 'active' : ''}" data-target='${escapeHtml(JSON.stringify(target))}'>${text}</button>`;
-  const online = state.players.filter((p) => p.online);
+  const onlinePlayers = state.players.filter((p) => p.online);
   $('targets').innerHTML = [
     btn({ type: 'all' }, '📣 Todos', t.type === 'all'),
     '<div class="target-group">Ambientes</div>',
     ...state.zones.map((z) => {
-      const count = online.filter((p) => zoneOf(p) === z.id).length;
+      const count = onlinePlayers.filter((p) => p.zoneId === z.id).length;
       return btn({ type: 'zone', zoneId: z.id }, `📢 ${escapeHtml(z.name)} <span class="muted">(${count})</span>`, isZoneTarget(z.id));
     }),
     '<div class="target-group">Sussurro</div>',
-    ...(online.length
-      ? online.map((p) => btn({ type: 'player', userId: p.userId }, `🤫 ${escapeHtml(p.displayName)}`, isWhisperTarget(p.userId)))
+    ...(onlinePlayers.length
+      ? onlinePlayers.map((p) => btn({ type: 'player', userId: p.userId }, `🤫 ${escapeHtml(p.displayName)}`, isWhisperTarget(p.userId)))
       : ['<div class="hint">Nenhum jogador online.</div>']),
   ].join('');
 }
 
 function renderHearing() {
   const names = routing().hearFrom.map(nameOf);
-  $('hearing').textContent = names.length ? names.join(', ') : 'Ninguém no momento.';
+  $('hearing').textContent = names.length ? names.join(', ') : inCall ? 'Ninguém no momento.' : '—';
+}
+
+// ---------------------------------------------------------------------------
+// Início
+// ---------------------------------------------------------------------------
+
+try {
+  db = await loadData();
+} catch (err) {
+  console.error(err);
+}
+if (!db) {
+  showOverlay('Sala indisponível', 'Sala não encontrada ou você não faz parte dela.', 'Voltar ao painel', () => location.replace('/painel'));
+} else {
+  isMaster = db.room.master_id === user.id;
+  document.title = `${db.room.name} — Sistema RPG`;
+  $('room-name').textContent = db.room.name;
+  const inviteCode = db.room.room_invites && db.room.room_invites.code;
+  if (isMaster && inviteCode) {
+    $('invite').classList.remove('hidden');
+    $('invite-code').textContent = inviteCode;
+    $('invite').title = 'Clique para copiar';
+    $('invite').style.cursor = 'pointer';
+    $('invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado!'));
+  }
+  $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
+  if (isMaster) setupMasterControls();
+  else setupPlayerControls();
+  $('join-btn').onclick = startCall;
+  recompute();
 }

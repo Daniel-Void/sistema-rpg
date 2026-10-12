@@ -1,5 +1,5 @@
 /**
- * Regras de roteamento de áudio da call.
+ * Regras de roteamento de áudio da call (usadas por todos os navegadores da sala).
  *
  * Cada participante está em um ambiente (zona). As regras são:
  *  - Jogadores ouvem os outros jogadores do MESMO ambiente.
@@ -10,12 +10,12 @@
  *      { type: 'player', userId }       -> só aquele jogador (sussurro)
  *  - Um jogador pode "sussurrar para o mestre": enquanto isso, só o mestre o ouve.
  *
- * O servidor calcula para cada participante a lista de pessoas para quem ele
- * deve ENVIAR áudio. O cliente só envia a faixa de microfone para essas pessoas,
- * então quem não deve ouvir simplesmente não recebe o áudio.
+ * O estado (ambientes, alvo do mestre, sussurros) vem do banco, onde só quem
+ * tem permissão consegue alterar. Cada navegador calcula para quem pode ENVIAR
+ * o próprio microfone; quem não deve ouvir simplesmente não recebe o áudio.
  */
 
-function canHear(state, speakerId, listenerId) {
+export function canHear(state, speakerId, listenerId) {
   if (speakerId === listenerId) return false;
   const speaker = state.participants.get(speakerId);
   const listener = state.participants.get(listenerId);
@@ -33,7 +33,7 @@ function canHear(state, speakerId, listenerId) {
   return speaker.zoneId != null && speaker.zoneId === listener.zoneId;
 }
 
-function computeRouting(state) {
+export function computeRouting(state) {
   const ids = [...state.participants.keys()];
   const routing = {};
   for (const id of ids) routing[id] = { sendTo: [], hearFrom: [] };
@@ -49,11 +49,9 @@ function computeRouting(state) {
 }
 
 /** Garante que o alvo do mestre ainda é válido (ambiente/jogador pode ter saído). */
-function normalizeMasterTarget(target, { zoneIds, playerIds }) {
+export function normalizeMasterTarget(target, { zoneIds, playerIds }) {
   if (!target || typeof target !== 'object') return { type: 'all' };
   if (target.type === 'zone' && zoneIds.includes(target.zoneId)) return { type: 'zone', zoneId: target.zoneId };
   if (target.type === 'player' && playerIds.includes(target.userId)) return { type: 'player', userId: target.userId };
   return { type: 'all' };
 }
-
-module.exports = { canHear, computeRouting, normalizeMasterTarget };
