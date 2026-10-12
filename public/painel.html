@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/style.css">
+  <title>Sistema RPG — Painel</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="title"><span>🎲</span><h1>Sistema RPG</h1></div>
+    <div class="actions">
+      <span id="who" class="muted small"></span>
+      <span id="role-pill" class="pill"></span>
+      <button id="logout" class="small ghost">Sair</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="grid-2">
+      <section class="card" id="create-card">
+        <h2>Criar nova sala</h2>
+        <form id="create-form">
+          <label for="room-name">Nome da sala</label>
+          <input id="room-name" maxlength="60" required placeholder="Ex.: A Maldição de Strahd">
+          <label for="room-desc">Descrição (opcional)</label>
+          <textarea id="room-desc" rows="2" maxlength="500"></textarea>
+          <button type="submit" class="primary" style="margin-top:1rem">Criar sala</button>
+          <div class="error" id="create-error"></div>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Entrar com código</h2>
+        <p class="muted small">Peça o código de convite para o mestre da mesa.</p>
+        <form id="join-form">
+          <label for="join-code">Código de convite</label>
+          <input id="join-code" maxlength="16" required placeholder="Ex.: K7M2QX" style="text-transform:uppercase">
+          <button type="submit" class="primary" style="margin-top:1rem">Entrar na sala</button>
+          <div class="error" id="join-error"></div>
+        </form>
+      </section>
+    </div>
+
+    <h2 style="margin-top:2rem">Minhas salas</h2>
+    <div id="rooms" class="room-list"></div>
+  </main>
+  <script type="module" src="/js/painel.js"></script>
+</body>
+</html>

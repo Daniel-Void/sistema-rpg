@@ -1,0 +1,27 @@
+{
+  "name": "sistema-rpg",
+  "version": "0.1.0",
+  "description": "Plataforma de RPG online com salas, mestres, jogadores e call de voz com ambientes separados.",
+  "main": "server/index.js",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Daniel-Void/sistema-rpg.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.22.3",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}

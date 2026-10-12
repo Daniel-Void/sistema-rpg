@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/style.css">
+  <title>Sistema RPG — Sala</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">
+      <a href="/painel" class="btn small ghost" title="Voltar ao painel">←</a>
+      <h1 id="room-name">Carregando…</h1>
+      <span id="invite" class="pill hidden">Convite: <span class="code" id="invite-code"></span></span>
+    </div>
+    <div class="actions">
+      <span id="conn-status" class="pill">Desconectado</span>
+      <button id="mute-btn" class="small" disabled>🎙️ Microfone ligado</button>
+      <button id="leave-btn" class="small danger">Sair da call</button>
+    </div>
+  </header>
+
+  <main class="room-layout">
+    <section>
+      <div id="master-row" class="master-row"></div>
+      <div id="zones" class="zones"></div>
+    </section>
+    <aside class="side">
+      <div id="talk-status" class="talk-status">
+        <div class="label" id="talk-label">Você está falando com</div>
+        <div class="value" id="talk-value">—</div>
+        <div class="hint" id="talk-hint"></div>
+      </div>
+      <div id="master-panel" class="card hidden">
+        <h3>Falar com…</h3>
+        <div id="targets" class="target-list"></div>
+        <p class="hint" style="margin-top:0.75rem"><kbd>Esc</kbd> volta a falar com todos.</p>
+        <h3 style="margin-top:1rem">Novo ambiente</h3>
+        <form id="zone-form" class="inline-form">
+          <input id="zone-name" maxlength="40" placeholder="Ex.: Floresta" required>
+          <button type="submit" class="primary small">Criar</button>
+        </form>
+        <p class="hint" style="margin-top:0.5rem">Arraste os jogadores entre os ambientes (ou use o seletor no card).</p>
+      </div>
+      <div id="player-panel" class="card hidden">
+        <h3>Falar só com o mestre</h3>
+        <button id="whisper-btn" class="hold-btn">🤫 Segure para sussurrar</button>
+        <p class="hint" style="margin-top:0.5rem">Ou segure <kbd>V</kbd>. Enquanto segura, só o mestre te ouve.</p>
+        <h3 style="margin-top:1rem">Você está ouvindo</h3>
+        <div id="hearing" class="small muted">—</div>
+      </div>
+    </aside>
+  </main>
+
+  <div id="join-overlay" class="join-overlay">
+    <div class="card">
+      <h2 id="overlay-title">Pronto para a sessão?</h2>
+      <p class="muted" id="overlay-text">Vamos pedir acesso ao seu microfone para entrar na call.</p>
+      <button id="join-btn" class="primary">🎙️ Entrar na call</button>
+      <div class="error" id="join-error"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="/js/room.js"></script>
+</body>
+</html>
