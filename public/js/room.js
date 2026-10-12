@@ -85,7 +85,7 @@ async function loadData() {
       .eq('id', roomId)
       .maybeSingle(),
     supabase.from('zones').select(`id, name, position, ${SCENE_COLS}`).eq('room_id', roomId).eq('archived', false).order('position').order('id'),
-    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, profile:profiles(display_name)').eq('room_id', roomId),
+    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, whisper_requested, profile:profiles(display_name)').eq('room_id', roomId),
     supabase.from('room_media').select('id, kind, name, storage_path, created_at').eq('room_id', roomId).order('created_at'),
   ]);
   const error = roomRes.error || zonesRes.error || membersRes.error || mediaRes.error;
@@ -146,6 +146,7 @@ function recompute() {
         online: Boolean(presence),
         muted: presence ? presence.muted : false,
         whisperToMaster: m.whisper_to_master,
+        whisperRequested: m.whisper_requested,
       };
     })
     .sort((a, b) => a.displayName.localeCompare(b.displayName, 'pt-BR'));
@@ -206,8 +207,11 @@ function connectRealtime() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, ({ new: row }) => {
         const member = db && row && db.members.find((m) => m.user_id === row.user_id);
         if (!member) return onChange();
+        const newRequest = row.whisper_requested && !member.whisper_requested;
         member.zone_id = row.zone_id;
         member.whisper_to_master = row.whisper_to_master;
+        member.whisper_requested = row.whisper_requested;
+        if (isMaster && newRequest) toast(`${(member.profile && member.profile.display_name) || 'Um jogador'} pediu para falar em particular.`, 6000);
         recompute();
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, onChange)
@@ -832,8 +836,11 @@ function setupMasterControls() {
   });
 
   $('targets').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-target]');
-    if (btn) setTarget(JSON.parse(btn.dataset.target));
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.target) setTarget(JSON.parse(btn.dataset.target));
+    if (btn.dataset.whisperStart) rpc('start_whisper', { p_user_id: btn.dataset.whisperStart });
+    if (btn.dataset.whisperEnd) rpc('end_whisper', { p_user_id: btn.dataset.whisperEnd });
   });
 
   document.addEventListener('keydown', (e) => {
@@ -846,7 +853,8 @@ function setupMasterControls() {
     if (!btn) return;
     const zoneId = Number(btn.dataset.zone);
     if (btn.dataset.action === 'narrate') setTarget({ type: 'zone', zoneId });
-    if (btn.dataset.action === 'whisper') setTarget({ type: 'player', userId: btn.dataset.user });
+    if (btn.dataset.action === 'whisper-start') rpc('start_whisper', { p_user_id: btn.dataset.user });
+    if (btn.dataset.action === 'whisper-end') rpc('end_whisper', { p_user_id: btn.dataset.user });
     if (btn.dataset.action === 'rename') {
       const name = prompt('Novo nome do ambiente:', zoneById(zoneId).name);
       if (name && name.trim()) rpc('rename_zone', { p_zone_id: zoneId, p_name: name.trim() });
@@ -1034,28 +1042,11 @@ async function uploadFiles(files) {
 // ---------------------------------------------------------------------------
 
 function setupPlayerControls() {
-  let whispering = false;
-  const btn = $('whisper-btn');
-  const setWhisper = (active) => {
-    if (active === whispering || !inCall) return;
-    whispering = active;
-    btn.classList.toggle('holding', active);
-    btn.lastElementChild.textContent = active ? 'Sussurrando para o mestre' : 'Segure para sussurrar';
-    rpc('set_whisper', { p_active: active });
+  $('whisper-btn').onclick = () => {
+    const me = playerById(user.id);
+    if (!inCall || !me || me.whisperToMaster) return;
+    rpc('request_whisper', { p_active: !me.whisperRequested });
   };
-  btn.addEventListener('pointerdown', (e) => {
-    btn.setPointerCapture(e.pointerId);
-    setWhisper(true);
-  });
-  btn.addEventListener('pointerup', () => setWhisper(false));
-  btn.addEventListener('pointercancel', () => setWhisper(false));
-  document.addEventListener('keydown', (e) => {
-    if ((e.key === 'v' || e.key === 'V') && !e.repeat && !e.target.closest('input, textarea, select')) setWhisper(true);
-  });
-  document.addEventListener('keyup', (e) => {
-    if (e.key === 'v' || e.key === 'V') setWhisper(false);
-  });
-  window.addEventListener('blur', () => setWhisper(false));
 
   const vol = $('player-scene-volume');
   vol.value = playerSceneVolume;
@@ -1070,7 +1061,7 @@ function setupPlayerControls() {
 // Renderização
 // ---------------------------------------------------------------------------
 
-function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, master, zoneId }) {
+function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, whisperRequested, master, zoneId }) {
   const me = userId === user.id;
   const draggable = isMaster && !master;
   const zoneOptions =
@@ -1081,7 +1072,9 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
       : '';
   const whisperBtn =
     isMaster && !master && isOnline
-      ? `<button class="sm icon-only ${isWhisperTarget(userId) ? 'whisper-active' : ''}" data-action="whisper" data-user="${escapeHtml(userId)}" title="Falar só com ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
+      ? whisperToMaster
+        ? `<button class="sm icon-only whisper-active" data-action="whisper-end" data-user="${escapeHtml(userId)}" title="Encerrar sussurro com ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
+        : `<button class="sm icon-only ${whisperRequested ? 'whisper-active' : ''}" data-action="whisper-start" data-user="${escapeHtml(userId)}" title="${whisperRequested ? 'Aceitar pedido de' : 'Iniciar sussurro com'} ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
       : '';
   const sub = master ? (isOnline ? 'Mestre, na call' : 'Mestre, fora da call') : isOnline ? 'Na call' : 'Fora da call';
   return `
@@ -1094,7 +1087,8 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
       </div>
       <div class="badges">
         ${isMuted ? `<span title="Microfone desligado">${icon('micOff', 15)}</span>` : ''}
-        ${whisperToMaster && isOnline ? '<span class="tag whisper">sussurrando</span>' : ''}
+        ${whisperToMaster && isOnline ? '<span class="tag whisper">em sussurro</span>' : ''}
+        ${whisperRequested && !whisperToMaster && isOnline ? '<span class="tag accent">pediu sussurro</span>' : ''}
       </div>
       ${zoneOptions || whisperBtn ? `<div class="controls">${zoneOptions}${whisperBtn}</div>` : ''}
     </div>`;
@@ -1166,6 +1160,7 @@ function render() {
     renderSfx();
   } else {
     renderHearing();
+    renderPlayerWhisper();
   }
 }
 
@@ -1201,6 +1196,13 @@ function renderTalkStatus(myZone) {
       value = 'Você, em particular';
       whisper = true;
     }
+    const me = playerById(user.id);
+    if (me && me.whisperToMaster) {
+      label = 'Conversa particular';
+      value = 'Você e o mestre';
+      hint = 'Só o mestre ouve você.';
+      whisper = true;
+    }
     hint = `${hint} Você está em: ${zoneName}.`.trim();
   }
   box.classList.toggle('whisper', whisper);
@@ -1223,7 +1225,20 @@ function renderTargets() {
     }),
     '<p class="eyebrow group-label">Sussurro</p>',
     ...(onlinePlayers.length
-      ? onlinePlayers.map((p) => btn({ type: 'player', userId: p.userId }, `${icon('whisper', 15)}${escapeHtml(p.displayName)}`, isWhisperTarget(p.userId), '', 'whisper-active'))
+      ? onlinePlayers
+          .slice()
+          .sort((a, b) => Number(b.whisperRequested) - Number(a.whisperRequested))
+          .map((p) => {
+            const name = escapeHtml(p.displayName);
+            if (p.whisperToMaster) {
+              return `<button class="sm whisper-active" data-whisper-end="${escapeHtml(p.userId)}">${icon('whisper', 15)}${name}<span class="count">Encerrar</span></button>`;
+            }
+            if (p.whisperRequested) {
+              return `<div class="request"><span>${icon('whisper', 15)}${name} pediu para falar</span>
+                <span class="inline"><button class="sm primary" data-whisper-start="${escapeHtml(p.userId)}">Aceitar</button><button class="sm" data-whisper-end="${escapeHtml(p.userId)}">Recusar</button></span></div>`;
+            }
+            return `<button class="sm" data-whisper-start="${escapeHtml(p.userId)}">${icon('whisper', 15)}${name}<span class="count">Sussurrar</span></button>`;
+          })
       : ['<div class="hint">Nenhum jogador na call.</div>']),
   ].join('');
 }
@@ -1280,6 +1295,28 @@ function renderSfx() {
   $('sfx-grid').innerHTML = audios.length
     ? audios.map((m) => `<button class="sm" data-sfx="${m.id}" title="${escapeHtml(m.name)}">${icon('play', 13)}<span>${escapeHtml(m.name)}</span></button>`).join('')
     : '<div class="hint" style="grid-column:1/-1">Nenhum áudio na biblioteca.</div>';
+}
+
+function renderPlayerWhisper() {
+  const me = playerById(user.id);
+  const btn = $('whisper-btn');
+  const label = btn.lastElementChild;
+  const hint = $('whisper-hint');
+  btn.classList.remove('holding', 'active');
+  btn.disabled = !inCall || !state.master.online;
+  if (me && me.whisperToMaster) {
+    btn.classList.add('holding');
+    btn.disabled = true;
+    label.textContent = 'Em conversa particular';
+    hint.textContent = 'Só o mestre ouve você. O mestre encerra a conversa.';
+  } else if (me && me.whisperRequested) {
+    btn.classList.add('active');
+    label.textContent = 'Cancelar pedido';
+    hint.textContent = 'Pedido enviado. Aguardando o mestre aceitar.';
+  } else {
+    label.textContent = 'Pedir para falar com o mestre';
+    hint.textContent = !state.master.online ? 'O mestre não está na call.' : 'O mestre decide quando a conversa começa e termina.';
+  }
 }
 
 function renderHearing() {

@@ -17,8 +17,9 @@ Durante a sessão, o mestre divide o grupo em **ambientes** (ex.: *Fogueira*, *F
 | Mestre | Ouve **todos** os jogadores (com volume ajustável por ambiente) |
 | Mestre falando com **Todos** | Todo mundo ouve o mestre |
 | Mestre **narrando para um ambiente** | Só quem está naquele ambiente ouve. Os outros continuam conversando entre si normalmente |
-| Mestre **sussurrando** para um jogador | Só aquele jogador ouve o mestre |
-| Jogador segurando **"sussurrar"** (botão ou tecla `V`) | Só o mestre ouve o jogador |
+| **Sussurro** (conversa particular) | O mestre e o jogador só se ouvem entre si; o jogador continua ouvindo o próprio ambiente |
+
+**Quem controla o sussurro é o mestre.** O jogador só pode **pedir** ("Pedir para falar com o mestre") ou cancelar o pedido. O mestre recebe o aviso e **aceita** ou **recusa**, e também pode **forçar** o sussurro com qualquer jogador, sem pedido. Só o mestre encerra. Um sussurro novo encerra o anterior.
 
 Exemplo: o jogador 1 vai para a floresta. O mestre cria o ambiente *Floresta*, arrasta o jogador para lá e clica em **"Narrar só para este ambiente"**. Quem está na fogueira não ouve a narração e continua conversando entre si. `Esc` volta a falar com todos.
 
@@ -53,7 +54,7 @@ Navegador ──(login, salas, ambientes, alvo do mestre)──▶ Supabase Post
     └──── áudio direto (WebRTC P2P) ────▶ outros navegadores da sala
 ```
 
-- **O estado da call fica no banco** (`rooms.master_target`, `room_members.zone_id`, `room_members.whisper_to_master`) e só pode ser alterado por funções que checam permissão (`create_room`, `move_player`, `set_master_target`, `set_whisper`…). Um jogador não consegue se mover de ambiente nem mudar o alvo do mestre.
+- **O estado da call fica no banco** (`rooms.master_target`, `room_members.zone_id`, `room_members.whisper_to_master`, `room_members.whisper_requested`) e só pode ser alterado por funções que checam permissão (`create_room`, `move_player`, `set_master_target`, `request_whisper`, `start_whisper`, `end_whisper`…). Um jogador não consegue se mover de ambiente nem mudar o alvo do mestre.
 - **Cada navegador calcula as regras** com `public/js/audioRules.js`, a partir desse estado confiável, e só **envia** o microfone para quem pode ouvir. Quem não deve ouvir não recebe o áudio, então não dá para burlar pelo navegador.
 - **A sinalização do WebRTC** (offer/answer) vai pela tabela `signals`. O remetente é sempre o usuário logado e só o destinatário consegue ler, então ninguém se passa por outro jogador.
 - **Presença** (quem está na call, microfone mudo, se o mestre está compartilhando a tela) usa um canal Realtime privado, liberado só para os participantes da sala.
