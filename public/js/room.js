@@ -1,5 +1,8 @@
 import { supabase, currentUser, escapeHtml, friendlyError, initials, toast } from './supabase.js';
 import { ICE_SERVERS } from './config.js';
+
+// Servidores STUN/TURN; trocados pelos da Vercel (/api/ice) ao entrar na call.
+let iceServers = ICE_SERVERS;
 import { computeRouting, normalizeMasterTarget } from './audioRules.js';
 import { effectiveScene, parseYouTube, targetIncludes } from './sceneRules.js';
 import { hydrateIcons, icon } from './icons.js';
@@ -320,16 +323,24 @@ async function sendSignal(peer, data) {
 }
 
 /** Espera o navegador reunir os candidatos de rede, para mandar tudo numa mensagem só. */
-function waitForIce(pc, timeout = 2500) {
+function waitForIce(pc, timeout = 2500, maxWait = 10000) {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  const start = Date.now();
+  const hasCandidate = () => /\ba=candidate:/.test((pc.localDescription && pc.localDescription.sdp) || '');
   return new Promise((resolve) => {
+    let timer;
     const done = () => {
       pc.removeEventListener('icegatheringstatechange', check);
       clearTimeout(timer);
       resolve();
     };
     const check = () => pc.iceGatheringState === 'complete' && done();
-    const timer = setTimeout(done, timeout);
+    // Sem nenhum caminho de rede na descrição a conexão não fecha; espera mais.
+    const tick = () => {
+      if (hasCandidate() || Date.now() - start >= maxWait) done();
+      else timer = setTimeout(tick, 250);
+    };
+    timer = setTimeout(tick, timeout);
     pc.addEventListener('icegatheringstatechange', check);
   });
 }
@@ -339,8 +350,48 @@ async function sendDescription(peer) {
   await sendSignal(peer, { description: peer.pc.localDescription.toJSON() });
 }
 
+// O navegador (principalmente no celular) pode bloquear o som que chega sem um
+// toque recente. Nesse caso mostramos um aviso e tentamos de novo no próximo toque.
+const blockedAudio = new Set();
+function playRemote(el) {
+  el.play().then(
+    () => {
+      blockedAudio.delete(el);
+      renderAudioUnlock();
+    },
+    (err) => {
+      if (err && err.name === 'NotAllowedError') {
+        blockedAudio.add(el);
+        renderAudioUnlock();
+      }
+    },
+  );
+}
+function unlockAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  for (const el of [...blockedAudio]) playRemote(el);
+}
+function renderAudioUnlock() {
+  $('audio-unlock').classList.toggle('hidden', !inCall || blockedAudio.size === 0);
+}
+$('audio-unlock').onclick = unlockAudio;
+
+async function loadIceServers() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session && data.session.access_token;
+    const res = await fetch('/api/ice', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) return;
+    const body = await res.json();
+    if (Array.isArray(body.iceServers) && body.iceServers.length) iceServers = body.iceServers;
+    if (!body.turn) console.warn('call sem TURN: jogadores em 4G ou redes restritas podem não se conectar');
+  } catch (err) {
+    console.warn('ice', err);
+  }
+}
+
 function createPeer(peerId, peerSession, initiator) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  const pc = new RTCPeerConnection({ iceServers });
   const audio = new Audio();
   audio.autoplay = true;
   const peer = {
@@ -377,7 +428,7 @@ function createPeer(peerId, peerSession, initiator) {
       peer.screenAudio.autoplay = true;
       peer.screenAudio.srcObject = new MediaStream([track]);
       peer.screenAudio.volume = Math.min(1, playerSceneVolume);
-      peer.screenAudio.play().catch(() => {});
+      playRemote(peer.screenAudio);
       return;
     }
     if (track.kind === 'video') {
@@ -391,7 +442,7 @@ function createPeer(peerId, peerSession, initiator) {
     peer.audioTx = peer.audioTx || transceiver;
     const stream = new MediaStream([track]);
     audio.srcObject = stream;
-    audio.play().catch(() => {});
+    playRemote(audio);
     watchLevel(peerId, stream);
     applyPeerRouting(peer);
   };
@@ -1241,9 +1292,7 @@ function nextReveal() {
 }
 $('dice-reveal').onclick = () => nextReveal();
 // Celulares suspendem o áudio até um toque; qualquer toque reativa o som dos dados.
-document.addEventListener('pointerdown', () => {
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-});
+document.addEventListener('pointerdown', unlockAudio);
 
 /** Som de um dado batendo na mesa (sintetizado, sem arquivo). */
 function scheduleDiceHit(inSeconds, strength = 1, faces = 20) {
@@ -1458,6 +1507,7 @@ async function startCall() {
     audioCtx = null;
   }
   if (localStream) watchLevel(user.id, localStream);
+  await loadIceServers();
   inCall = true;
   try {
     await connectRealtime();

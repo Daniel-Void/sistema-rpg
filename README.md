@@ -1,4 +1,4 @@
-# 🎲 Sistema RPG
+# Sistema RPG
 
 Plataforma de RPG online: mestres criam salas, jogadores entram com um código de convite, e todos conversam numa **call de voz com ambientes separados**. O mestre controla o que cada ambiente vê e ouve (cenas, som ambiente e efeitos) e pode compartilhar a tela.
 
@@ -111,14 +111,29 @@ Por padrão o site local usa o mesmo projeto Supabase de produção (`public/js/
 ### `public/js/config.js`
 
 - `SUPABASE_URL` e `SUPABASE_KEY` (chave **publishable**, feita para ficar no navegador; quem protege os dados é o RLS).
-- `ICE_SERVERS`: STUN/TURN da call. O STUN do Google resolve a maioria dos casos, mas jogadores em redes restritivas (4G, empresas) precisam de um **TURN** (ex.: Metered, Cloudflare, Twilio ou coturn próprio):
+- `ICE_SERVERS`: STUN usado quando não há TURN configurado.
 
-  ```js
-  export const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'turn:turn.seudominio.com:3478', username: 'usuario', credential: 'senha' },
-  ];
-  ```
+### Servidor TURN (necessário para a voz funcionar em qualquer rede)
+
+Só com STUN, a voz e a tela falham entre jogadores em 4G, em muitos Wi-Fi de
+operadora e em redes de empresa (o navegador não acha um caminho direto). O TURN
+retransmite o áudio nesses casos. As chaves ficam **só na Vercel**: a função
+`api/ice.js` entrega credenciais temporárias apenas para usuários logados.
+
+Na Vercel: projeto `sistema-rpg` → Settings → Environment Variables → adicione
+um dos conjuntos abaixo e faça um novo deploy.
+
+- **Cloudflare (recomendado, 1000 GB/mês grátis)**: em dash.cloudflare.com →
+  Realtime → TURN Server → Create. Copie o *Turn Token ID* e o *API Token*:
+  `CLOUDFLARE_TURN_KEY_ID` e `CLOUDFLARE_TURN_API_TOKEN`.
+- **Metered (20 GB/mês grátis)**: crie uma conta em metered.ca, crie uma
+  credencial de TURN e use `METERED_DOMAIN` (ex.: `seuapp.metered.live`) e
+  `METERED_API_KEY`.
+- **Qualquer TURN (ex.: coturn próprio)**: `TURN_URLS` (separadas por vírgula),
+  `TURN_USERNAME` e `TURN_CREDENTIAL`.
+
+Para conferir: abra `/api/ice` logado (pelo console do navegador na sala) e
+veja `"turn": true`; sem TURN, o console da sala avisa "call sem TURN".
 
 ### Supabase (painel)
 

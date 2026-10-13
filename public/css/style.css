@@ -434,3 +434,7 @@ label.check input { width: auto; }
 .die-3d.dropped .die-num { text-decoration: line-through; }
 .dice-reveal .bonus { color: rgba(244, 239, 228, 0.9); }
 @keyframes die-settle { 0% { scale: 1.12; } 100% { scale: 1; } }
+
+/* Aviso quando o navegador bloqueia o som da call */
+.audio-unlock { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 70; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.65rem 1.1rem; background: var(--accent); color: #fff; border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); max-width: calc(100% - 32px); }
+.audio-unlock.hidden { display: none; }
