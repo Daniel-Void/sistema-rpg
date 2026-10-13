@@ -68,6 +68,7 @@
           <button role="tab" data-tab="voz" aria-selected="true">Voz</button>
           <button role="tab" data-tab="cena" aria-selected="false">Cena</button>
           <button role="tab" data-tab="sons" aria-selected="false">Sons</button>
+          <button role="tab" data-tab="dados" aria-selected="false">Dados <span id="dice-badge" class="badge-count hidden"></span></button>
         </div>
 
         <div data-panel="voz">
@@ -117,6 +118,25 @@
           <button id="sfx-stop" class="sm" style="margin-top:0.75rem;width:100%"><i data-icon="stop" data-size="14"></i>Parar efeitos</button>
           <p class="hint" style="margin-top:0.6rem">Os áudios enviados na aba Cena aparecem aqui.</p>
         </div>
+
+        <div data-panel="dados" hidden>
+          <div id="dice-requests"></div>
+          <p class="eyebrow" style="margin-top:0">Rolar</p>
+          <form id="master-dice-form" onsubmit="return false">
+            <div class="dice-chips" data-for="master-dice-expr"></div>
+            <input id="master-dice-expr" class="mono" maxlength="200" placeholder="1d20+5, 2d20kh1, 4d6dl1..." autocomplete="off" required>
+            <p class="hint dice-preview" id="master-dice-preview"></p>
+            <input id="master-dice-label" maxlength="80" placeholder="Motivo (opcional): Percepção, Ataque..." autocomplete="off" style="margin-top:0.5rem">
+            <label for="master-dice-who">Quem rola</label>
+            <select id="master-dice-who"></select>
+            <label class="check"><input type="checkbox" id="master-dice-secret"> Secreto (só eu e quem rolar vemos)</label>
+            <button type="submit" class="primary" id="master-dice-submit" style="width:100%;margin-top:0.75rem">Rolar</button>
+          </form>
+          <div id="dice-ordered"></div>
+          <hr class="divider">
+          <p class="eyebrow">Histórico</p>
+          <div id="master-dice-log" class="dice-log"></div>
+        </div>
       </div>
 
       <div id="player-panel" class="panel hidden">
@@ -134,10 +154,25 @@
           <span id="music-label">Música ambiente</span>
           <button id="music-toggle" class="sm quiet icon-only" title="Silenciar música"><i data-icon="volume" data-size="15"></i></button>
         </div>
+        <hr class="divider">
+        <p class="eyebrow">Dados</p>
+        <form id="player-dice-form" onsubmit="return false">
+          <div class="dice-chips" data-for="player-dice-expr"></div>
+          <input id="player-dice-expr" class="mono" maxlength="200" placeholder="1d20+3" autocomplete="off" required>
+          <p class="hint dice-preview" id="player-dice-preview"></p>
+          <input id="player-dice-label" maxlength="80" placeholder="Motivo (opcional)" autocomplete="off" style="margin-top:0.5rem">
+          <button type="submit" id="player-dice-submit" style="width:100%;margin-top:0.6rem">Pedir ao mestre para rolar</button>
+        </form>
+        <div id="player-dice-pending"></div>
+        <p class="eyebrow" style="margin-top:1rem">Rolagens</p>
+        <div id="player-dice-log" class="dice-log"></div>
 
       </div>
     </aside>
   </main>
+
+  <div id="dice-prompt" class="dice-prompt hidden" role="dialog" aria-live="assertive"></div>
+  <div id="dice-reveal" class="dice-reveal hidden" aria-live="polite"></div>
 
   <button id="ui-restore" class="ui-restore hidden" title="Mostrar interface (H)"><i data-icon="eye" data-size="16"></i><span>Mostrar interface</span></button>
 

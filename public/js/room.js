@@ -3,6 +3,7 @@ import { ICE_SERVERS } from './config.js';
 import { computeRouting, normalizeMasterTarget } from './audioRules.js';
 import { effectiveScene, parseYouTube, targetIncludes } from './sceneRules.js';
 import { hydrateIcons, icon } from './icons.js';
+import { describeDice, diceRange, parseDice } from './dice.js';
 
 hydrateIcons();
 
@@ -223,11 +224,13 @@ function connectRealtime() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'signals', filter: `to_user=eq.${user.id}` }, ({ new: row }) => onSignalRow(row))
       .on('broadcast', { event: 'sfx' }, ({ payload }) => onSfx(payload))
       .on('broadcast', { event: 'sfx-stop' }, () => stopAllSfx())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dice_rolls', filter: `room_id=eq.${roomId}` }, () => scheduleRolls())
       .on('presence', { event: 'sync' }, onPresenceSync)
       .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           await trackPresence();
           scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto conectava
+          scheduleRolls();
           resolve();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           updateConnStatus(false);
@@ -808,6 +811,350 @@ function onSfx(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// Dados (quem sorteia é o banco; aqui só pedimos, mostramos e animamos)
+// ---------------------------------------------------------------------------
+
+const QUICK_DICE = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100'];
+let rolls = []; // rolagens que eu posso ver (mais recentes primeiro)
+let rollsLoaded = false;
+const revealedRolls = new Set();
+const revealQueue = [];
+let revealing = false;
+let revealTimers = [];
+let requestsKey = '';
+
+async function callRpc(name, params) {
+  const { error } = await supabase.rpc(name, params);
+  if (error) toast(friendlyError(error));
+  scheduleRolls();
+  return !error;
+}
+
+let rollsTimer = null;
+function scheduleRolls() {
+  clearTimeout(rollsTimer);
+  rollsTimer = setTimeout(loadRolls, 60);
+}
+
+async function loadRolls() {
+  const { data, error } = await supabase
+    .from('dice_rolls')
+    .select('id, roller_id, created_by, expression, label, status, visibility, result, total, created_at, rolled_at')
+    .eq('room_id', roomId)
+    .order('created_at', { ascending: false })
+    .limit(60);
+  if (error) return console.error('rolls', error);
+  const fresh = [];
+  for (const r of data) {
+    if (r.status !== 'rolled' || revealedRolls.has(r.id)) continue;
+    revealedRolls.add(r.id);
+    if (rollsLoaded && Date.now() - new Date(r.rolled_at).getTime() < 60000) fresh.push(r);
+  }
+  if (isMaster && rollsLoaded) {
+    for (const r of data) {
+      if (r.status === 'requested' && !rolls.some((x) => x.id === r.id)) toast(`${nameOf(r.roller_id)} pediu para rolar ${r.expression}.`, 6000);
+    }
+  }
+  rolls = data;
+  rollsLoaded = true;
+  fresh.reverse().forEach(queueReveal);
+  renderDice();
+}
+
+function rollerName(id) {
+  if (id === user.id) return 'Você';
+  return state && state.master && state.master.userId === id ? state.master.displayName : nameOf(id);
+}
+
+/** Dados de cada termo, com mantidos/descartados e máximos/mínimos destacados. */
+function diceDetailHtml(result, limit = 80) {
+  if (!result || !Array.isArray(result.terms)) return '';
+  let shown = 0;
+  return result.terms
+    .map((t, i) => {
+      const op = t.sign < 0 ? '− ' : i > 0 ? '+ ' : '';
+      if (t.type === 'const') return `${op}${t.value}`;
+      const items = [];
+      for (let j = 0; j < t.rolls.length; j++) {
+        if (shown >= limit) {
+          items.push(`… mais ${t.rolls.length - j}`);
+          break;
+        }
+        shown++;
+        const v = t.rolls[j];
+        const cls = ['die'];
+        if (!t.kept[j]) cls.push('dropped');
+        else if (t.faces > 1 && v === t.faces) cls.push('max');
+        else if (t.faces > 1 && v === 1) cls.push('min');
+        items.push(`<span class="${cls.join(' ')}">${v}</span>`);
+      }
+      return `${op}${t.count}d${t.faces}${t.mode ? t.mode + t.k : ''} [${items.join(', ')}]`;
+    })
+    .join(' ');
+}
+
+function logEntryHtml(r) {
+  const secret = r.visibility === 'secret';
+  return `<div class="dice-entry ${secret ? 'secret' : ''}">
+    <div class="meta"><b>${escapeHtml(rollerName(r.roller_id))}</b>${r.label ? ` · ${escapeHtml(r.label)}` : ''}${secret ? ' · secreta' : ''}</div>
+    <div class="total">${r.total}</div>
+    <div class="detail" title="${escapeHtml(r.expression)}">${escapeHtml(r.expression)} = ${diceDetailHtml(r.result, 24)}</div>
+  </div>`;
+}
+
+function renderDiceLog(el) {
+  const done = rolls.filter((r) => r.status === 'rolled').slice(0, 30);
+  el.innerHTML = done.length ? done.map(logEntryHtml).join('') : '<div class="hint">Nenhuma rolagem ainda.</div>';
+}
+
+function renderDice() {
+  if (!state) return;
+  if (isMaster) {
+    const requests = rolls.filter((r) => r.status === 'requested').reverse();
+    const key = requests.map((r) => r.id).join(',');
+    if (key !== requestsKey) {
+      requestsKey = key;
+      $('dice-requests').innerHTML = requests.length
+        ? `<p class="eyebrow" style="margin-top:0">Pedidos dos jogadores</p>${requests
+            .map(
+              (r) => `<div class="dice-card request" data-roll="${r.id}">
+                <div class="who"><b>${escapeHtml(rollerName(r.roller_id))}</b> quer rolar${r.label ? ` · ${escapeHtml(r.label)}` : ''}</div>
+                <div class="actions"><input type="text" value="${escapeHtml(r.expression)}" data-expr aria-label="Expressão" maxlength="200"></div>
+                <div class="actions">
+                  <label class="check"><input type="checkbox" data-secret> Secreto</label>
+                  <span style="flex:1"></span>
+                  <button class="sm primary" data-approve>Aprovar</button>
+                  <button class="sm" data-deny>Recusar</button>
+                </div>
+              </div>`,
+            )
+            .join('')}<hr class="divider">`
+        : '';
+    }
+    $('dice-badge').textContent = requests.length;
+    $('dice-badge').classList.toggle('hidden', !requests.length);
+
+    const ordered = rolls.filter((r) => r.status === 'ordered').reverse();
+    $('dice-ordered').innerHTML = ordered.length
+      ? `<p class="eyebrow" style="margin-top:1rem">Aguardando jogadores</p>${ordered
+          .map(
+            (r) => `<div class="dice-card" data-roll="${r.id}">
+              <div class="who"><b>${escapeHtml(rollerName(r.roller_id))}</b> deve rolar <span class="expr">${escapeHtml(r.expression)}</span>${r.label ? ` · ${escapeHtml(r.label)}` : ''}${r.visibility === 'secret' ? ' · secreta' : ''}</div>
+              <div class="actions"><span style="flex:1"></span><button class="sm" data-cancel-order>Cancelar</button></div>
+            </div>`,
+          )
+          .join('')}`
+      : '';
+
+    const who = $('master-dice-who');
+    const current = who.value || 'me';
+    who.innerHTML = [`<option value="me">Eu (mestre)</option>`, ...state.players.map((p) => `<option value="${escapeHtml(p.userId)}">${escapeHtml(p.displayName)}${p.online ? '' : ' (fora da call)'}</option>`)].join('');
+    who.value = [...who.options].some((o) => o.value === current) ? current : 'me';
+    $('master-dice-submit').textContent = who.value === 'me' ? 'Rolar' : 'Mandar rolar';
+    renderDiceLog($('master-dice-log'));
+  } else {
+    const mine = rolls.filter((r) => r.roller_id === user.id);
+    const ordered = mine.filter((r) => r.status === 'ordered').reverse();
+    renderDicePrompt(ordered[0]);
+
+    const pending = mine.filter((r) => r.status === 'requested').reverse();
+    const recentDenied = mine.filter((r) => r.status === 'denied' && Date.now() - new Date(r.created_at).getTime() < 10 * 60000).slice(0, 2);
+    $('player-dice-pending').innerHTML = [
+      ...pending.map(
+        (r) => `<div class="dice-card" data-roll="${r.id}" style="margin-top:0.6rem">
+          <div class="who">Aguardando o mestre: <span class="expr">${escapeHtml(r.expression)}</span>${r.label ? ` · ${escapeHtml(r.label)}` : ''}</div>
+          <div class="actions"><span style="flex:1"></span><button class="sm" data-cancel-request>Cancelar pedido</button></div>
+        </div>`,
+      ),
+      ...recentDenied.map((r) => `<div class="hint" style="margin-top:0.5rem">O mestre recusou ${escapeHtml(r.expression)}${r.label ? ` (${escapeHtml(r.label)})` : ''}.</div>`),
+    ].join('');
+    $('player-dice-submit').disabled = pending.length >= 3;
+    renderDiceLog($('player-dice-log'));
+  }
+}
+
+let promptKey = null;
+function renderDicePrompt(r) {
+  const el = $('dice-prompt');
+  const key = r ? String(r.id) : null;
+  if (key === promptKey) return;
+  promptKey = key;
+  if (!r) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  const parsed = parseDice(r.expression);
+  el.innerHTML = `<div class="eyebrow">O mestre pediu uma rolagem</div>
+    ${r.label ? `<div style="font-family:var(--font-display);font-size:1.25rem;margin-top:0.3rem">${escapeHtml(r.label)}</div>` : ''}
+    <div class="expr">${escapeHtml(r.expression)}</div>
+    <div class="hint">${escapeHtml(describeDice(parsed))}${r.visibility === 'secret' ? ' · só você e o mestre verão o resultado' : ''}</div>
+    <button class="primary" data-perform="${r.id}">${icon('dice', 18)}Rolar</button>`;
+  el.classList.remove('hidden');
+}
+
+function queueReveal(r) {
+  revealQueue.push(r);
+  if (!revealing) nextReveal();
+}
+
+function nextReveal() {
+  revealTimers.forEach(clearTimeout);
+  revealTimers = [];
+  const el = $('dice-reveal');
+  const r = revealQueue.shift();
+  if (!r) {
+    revealing = false;
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  revealing = true;
+  el.innerHTML = `<div class="box">
+      <div class="who">${escapeHtml(rollerName(r.roller_id))} ${r.roller_id === user.id ? 'rolou' : 'rolou'}</div>
+      ${r.label ? `<div class="label">${escapeHtml(r.label)}</div>` : ''}
+      <div class="total rolling">&nbsp;</div>
+      <div class="expr">${escapeHtml(r.expression)}</div>
+      <div class="detail" style="visibility:hidden">${diceDetailHtml(r.result, 120)}</div>
+      ${r.visibility === 'secret' ? '<div class="secret-tag"><span class="tag whisper">Rolagem secreta</span></div>' : ''}
+    </div>`;
+  el.classList.remove('hidden');
+  const totalEl = el.querySelector('.total');
+  const range = diceRange(parseDice(r.expression)) || { min: 1, max: 20 };
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const land = () => {
+    totalEl.textContent = r.total;
+    totalEl.classList.remove('rolling');
+    totalEl.classList.add('landed');
+    el.querySelector('.detail').style.visibility = 'visible';
+  };
+  if (reduced) land();
+  else {
+    playDiceRattle();
+    const started = Date.now();
+    const spin = () => {
+      if (Date.now() - started >= 900) return land();
+      totalEl.textContent = Math.floor(range.min + Math.random() * (range.max - range.min + 1));
+      revealTimers.push(setTimeout(spin, 55));
+    };
+    spin();
+  }
+  revealTimers.push(setTimeout(nextReveal, 5200));
+}
+$('dice-reveal').onclick = () => nextReveal();
+
+/** Som curto de dados rolando, sintetizado (sem arquivo). */
+function playDiceRattle() {
+  if (!audioCtx || audioCtx.state === 'closed') return;
+  try {
+    const now = audioCtx.currentTime;
+    for (let i = 0; i < 7; i++) {
+      const t = now + i * 0.085 + Math.random() * 0.03;
+      const len = Math.floor(audioCtx.sampleRate * 0.03);
+      const buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let j = 0; j < len; j++) data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / len, 3);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1800 + Math.random() * 1600;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.25 * (1 - i / 9) * playerSceneVolume;
+      src.connect(filter).connect(gain).connect(audioCtx.destination);
+      src.start(t);
+    }
+  } catch (err) {
+    console.warn('dice sound', err);
+  }
+}
+
+function setupDiceControls() {
+  // Chips de dados rápidos
+  document.querySelectorAll('.dice-chips').forEach((box) => {
+    const input = $(box.dataset.for);
+    box.innerHTML = QUICK_DICE.map((d) => `<button type="button" class="sm" data-die="${d}">${d}</button>`).join('');
+    box.onclick = (e) => {
+      const btn = e.target.closest('[data-die]');
+      if (!btn) return;
+      const v = input.value.trim();
+      input.value = v ? `${v}+1${btn.dataset.die}` : `1${btn.dataset.die}`;
+      input.dispatchEvent(new Event('input'));
+      input.focus();
+    };
+  });
+  // Prévia ao digitar
+  const preview = (inputId, previewId) => {
+    const input = $(inputId);
+    const out = $(previewId);
+    input.addEventListener('input', () => {
+      const v = input.value.trim();
+      if (!v) {
+        out.textContent = '';
+        out.classList.remove('bad');
+        return;
+      }
+      const parsed = parseDice(v);
+      out.classList.toggle('bad', !parsed.ok);
+      if (!parsed.ok) out.textContent = parsed.error;
+      else {
+        const range = diceRange(parsed);
+        out.textContent = `${describeDice(parsed)}. Resultado entre ${range.min} e ${range.max}.`;
+      }
+    });
+  };
+
+  if (isMaster) {
+    preview('master-dice-expr', 'master-dice-preview');
+    $('master-dice-who').onchange = (e) => ($('master-dice-submit').textContent = e.target.value === 'me' ? 'Rolar' : 'Mandar rolar');
+    $('master-dice-form').addEventListener('submit', async () => {
+      const expr = $('master-dice-expr').value.trim();
+      const parsed = parseDice(expr);
+      if (!parsed.ok) return toast(parsed.error);
+      const who = $('master-dice-who').value;
+      const params = { p_room_id: roomId, p_expression: parsed.expression, p_label: $('master-dice-label').value.trim(), p_secret: $('master-dice-secret').checked };
+      const ok = who === 'me' ? await callRpc('master_roll', params) : await callRpc('order_roll', { ...params, p_user_id: who });
+      if (ok && who !== 'me') toast(`Pedido enviado para ${nameOf(who)}.`);
+    });
+    $('dice-requests').onclick = (e) => {
+      const card = e.target.closest('[data-roll]');
+      if (!card) return;
+      const id = Number(card.dataset.roll);
+      if (e.target.closest('[data-approve]')) {
+        const expr = card.querySelector('[data-expr]').value.trim();
+        const parsed = parseDice(expr);
+        if (!parsed.ok) return toast(parsed.error);
+        callRpc('approve_roll', { p_roll_id: id, p_expression: parsed.expression, p_secret: card.querySelector('[data-secret]').checked });
+      } else if (e.target.closest('[data-deny]')) {
+        callRpc('deny_roll', { p_roll_id: id });
+      }
+    };
+    $('dice-ordered').onclick = (e) => {
+      const card = e.target.closest('[data-roll]');
+      if (card && e.target.closest('[data-cancel-order]')) callRpc('deny_roll', { p_roll_id: Number(card.dataset.roll) });
+    };
+  } else {
+    preview('player-dice-expr', 'player-dice-preview');
+    $('player-dice-form').addEventListener('submit', async () => {
+      const parsed = parseDice($('player-dice-expr').value.trim());
+      if (!parsed.ok) return toast(parsed.error);
+      const ok = await callRpc('request_roll', { p_room_id: roomId, p_expression: parsed.expression, p_label: $('player-dice-label').value.trim() });
+      if (ok) toast('Pedido enviado ao mestre.');
+    });
+    $('player-dice-pending').onclick = (e) => {
+      const card = e.target.closest('[data-roll]');
+      if (card && e.target.closest('[data-cancel-request]')) callRpc('cancel_roll', { p_roll_id: Number(card.dataset.roll) });
+    };
+    $('dice-prompt').onclick = (e) => {
+      const btn = e.target.closest('[data-perform]');
+      if (!btn) return;
+      btn.disabled = true;
+      callRpc('perform_roll', { p_roll_id: Number(btn.dataset.perform) });
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Indicador de quem está falando
 // ---------------------------------------------------------------------------
 
@@ -1334,9 +1681,11 @@ function render() {
     renderShareControls();
     renderSceneEditor();
     renderSfx();
+    renderDice();
   } else {
     renderHearing();
     renderPlayerWhisper();
+    renderDice();
   }
 }
 
@@ -1516,6 +1865,8 @@ if (!db) {
     $('copy-invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado.'));
   }
   $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
+  setupDiceControls();
+  loadRolls();
   if (isMaster) setupMasterControls();
   else setupPlayerControls();
   $('join-btn').onclick = startCall;

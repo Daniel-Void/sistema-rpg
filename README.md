@@ -43,6 +43,35 @@ Na aba **Sons**, o mestre dispara **efeitos sonoros** (áudios enviados para a b
 
 > A música é tocada pelo player do YouTube em cada navegador (não fica sincronizada entre os jogadores). Vídeos cujo dono proíbe a reprodução fora do YouTube mostram "Este vídeo não permite tocar aqui"; nesse caso, escolha outro link.
 
+## Funcionalidade 4: dados
+
+**Quem sorteia é o servidor (banco de dados), nunca o navegador.** Nenhum jogador consegue escolher ou falsificar o resultado.
+
+| Quem | O que faz |
+|---|---|
+| **Jogador** | Escreve a rolagem (ou usa os botões d4…d100), põe um motivo opcional e clica em **Pedir ao mestre para rolar**. Pode cancelar o pedido. |
+| **Mestre** (aba **Dados**) | Vê os pedidos com contador, pode **ajustar a expressão**, marcar como **secreta** e **Aprovar** ou **Recusar**. |
+| **Mestre rolando** | Escolhe "Quem rola: Eu (mestre)" e clica em **Rolar**, aberto ou **secreto**. |
+| **Mestre mandando rolar** | Escolhe um jogador em "Quem rola" (ex.: Jogador 1, `2d20`, "Teste de Força") e clica em **Mandar rolar**. O pedido aparece na tela do jogador com um botão **Rolar**. O mestre pode cancelar enquanto o jogador não rola. |
+
+O resultado aparece em destaque na tela de todos, com animação e som de dados. Rolagens **secretas** só aparecem para o mestre e para quem rolou. Cada rolagem fica no histórico, com cada dado mostrado: os descartados aparecem riscados, os máximos em verde e os 1 em vermelho.
+
+**Notação aceita** (de `1d1` até `1000d1000` em cada termo):
+
+| Exemplo | Significado |
+|---|---|
+| `1d20`, `d20` | um dado de 20 lados |
+| `3d6+1d4-2` | soma e subtrai dados e números |
+| `d%` | o mesmo que `d100` |
+| `2d20kh1` | rola 2 e fica com o maior (vantagem) |
+| `2d20kl1` | rola 2 e fica com o menor (desvantagem) |
+| `4d6dl1` | rola 4 e descarta o menor |
+| `4d6dh1` | rola 4 e descarta o maior |
+
+Limites: até 20 termos e 5000 dados por rolagem. Enquanto você digita, aparece uma prévia ("2 dados de 20 lados (fica com o maior), mais 3. Resultado entre 4 e 23.") ou o motivo do erro.
+
+> A estrutura já está pronta para os **testes** (dificuldade, sucesso/falha, perícias etc.) que serão definidos depois: cada rolagem guarda quem rolou, o motivo, a expressão e todos os dados sorteados.
+
 ## Acesso de teste (usuários temporários)
 
 Enquanto a criação de contas não fica restrita aos administradores, a tela inicial cria um **usuário temporário** só com nome e papel (mestre ou jogador), sem e-mail e sem senha. O usuário fica salvo naquele navegador, então cada aparelho cria o seu. Por dentro, a função `create_temp_account` cria uma conta com e-mail interno e uma senha aleatória gerada no navegador (limite de 30 contas por minuto). O link "Entrar com e-mail e senha" continua disponível para contas normais.
@@ -101,7 +130,7 @@ Por padrão o site local usa o mesmo projeto Supabase de produção (`public/js/
 
 As migrações ficam em `supabase/migrations/`. Para recriar em outro projeto: `supabase link` + `supabase db push` (a migração `06` precisa do Realtime já inicializado: abra o site uma vez antes, ou rode-a depois).
 
-Tabelas: `profiles` (nome e papel, criado no cadastro), `rooms`, `room_invites` (só o mestre lê), `zones`, `room_members`, `signals`, `room_media` (biblioteca). As colunas `scene_media_id`, `scene_caption`, `ambient_youtube` e `ambient_volume` em `zones` e `rooms` guardam as cenas (gravadas pela função `set_environment`).
+Tabelas: `profiles` (nome e papel, criado no cadastro), `rooms`, `room_invites` (só o mestre lê), `zones`, `room_members`, `signals`, `room_media` (biblioteca), `dice_rolls` (rolagens). As colunas `scene_media_id`, `scene_caption`, `ambient_youtube` e `ambient_volume` em `zones` e `rooms` guardam as cenas (gravadas pela função `set_environment`).
 
 ## Limites atuais e próximos passos
 
@@ -118,6 +147,7 @@ public/
   js/supabase.js     # cliente Supabase + utilitários
   js/audioRules.js   # regras de quem ouve quem
   js/sceneRules.js   # cena de cada ambiente e alvos de efeitos/tela
+  js/dice.js         # leitura e prévia da notação de dados
   js/icons.js        # ícones em SVG
   js/room.js         # call, tela, cenas, efeitos e controles
 scripts/dev.js       # servidor local
