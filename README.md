@@ -132,6 +132,13 @@ um dos conjuntos abaixo e faça um novo deploy.
 - **Qualquer TURN (ex.: coturn próprio)**: `TURN_URLS` (separadas por vírgula),
   `TURN_USERNAME` e `TURN_CREDENTIAL`.
 
+**Trava de gasto (Cloudflare).** A Cloudflare cobra só acima de 1000 GB/mês. Com
+`CLOUDFLARE_ACCOUNT_ID` e `CLOUDFLARE_ANALYTICS_TOKEN` (token com apenas
+*Account Analytics: Read*), o sistema mede o consumo do mês a cada 5 minutos e
+para de entregar o TURN ao chegar em `TURN_LIMIT_GB` (padrão 900). Quem consegue
+conexão direta continua na call; o TURN volta sozinho no mês seguinte.
+`TURN_DISABLED=1` desliga o TURN na hora. O consumo aparece em `/api/turn-status`.
+
 Para conferir: abra `/api/ice` logado (pelo console do navegador na sala) e
 veja `"turn": true`; sem TURN, o console da sala avisa "call sem TURN".
 

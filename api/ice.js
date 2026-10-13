@@ -7,6 +7,9 @@
 //   CLOUDFLARE_TURN_KEY_ID + CLOUDFLARE_TURN_API_TOKEN   (Cloudflare Realtime TURN)
 //   METERED_DOMAIN + METERED_API_KEY                     (Metered / Open Relay)
 //   TURN_URLS + TURN_USERNAME + TURN_CREDENTIAL          (qualquer TURN, ex.: coturn)
+// Trava de gasto da Cloudflare: veja _turnUsage.js.
+
+import { turnStatus } from './_turnUsage.js';
 
 const SUPABASE_URL = 'https://toknaupmcfqhonsrpjct.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_57JJu48g_afjfLOyYXsw9A_ypZ3VkpG';
@@ -22,6 +25,12 @@ async function isLoggedIn(req) {
 async function turnServers() {
   const env = process.env;
   if (env.CLOUDFLARE_TURN_KEY_ID && env.CLOUDFLARE_TURN_API_TOKEN) {
+    // Trava de gasto: perto do fim da franquia grátis, para de entregar o TURN.
+    const status = await turnStatus();
+    if (status.blocked) {
+      console.warn('TURN bloqueado:', status.reason);
+      return [];
+    }
     const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.CLOUDFLARE_TURN_API_TOKEN}`, 'Content-Type': 'application/json' },
