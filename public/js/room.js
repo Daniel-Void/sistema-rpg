@@ -1240,6 +1240,10 @@ function nextReveal() {
   revealTimers.push(setTimeout(nextReveal, longest + 4200));
 }
 $('dice-reveal').onclick = () => nextReveal();
+// Celulares suspendem o áudio até um toque; qualquer toque reativa o som dos dados.
+document.addEventListener('pointerdown', () => {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+});
 
 /** Som de um dado batendo na mesa (sintetizado, sem arquivo). */
 function scheduleDiceHit(inSeconds, strength = 1, faces = 20) {
@@ -1434,20 +1438,26 @@ setInterval(() => {
 async function startCall() {
   $('join-error').textContent = '';
   $('join-btn').disabled = true;
+  // Sem microfone (permissão negada, aparelho sem mic) a pessoa ainda entra para
+  // ouvir, ver a tela do mestre, o ambiente e os dados de todos.
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false,
     });
+    micTrack = localStream.getAudioTracks()[0];
   } catch (err) {
-    $('join-btn').disabled = false;
-    $('join-error').textContent = 'Não foi possível acessar o microfone. Verifique a permissão do navegador.';
-    console.error(err);
-    return;
+    console.warn('sem microfone', err);
+    localStream = null;
+    micTrack = null;
+    toast('Microfone indisponível: você entrou só para ouvir e assistir. Libere o microfone no navegador e recarregue para falar.', 9000);
   }
-  micTrack = localStream.getAudioTracks()[0];
-  audioCtx = new AudioContext();
-  watchLevel(user.id, localStream);
+  try {
+    audioCtx = new AudioContext();
+  } catch {
+    audioCtx = null;
+  }
+  if (localStream) watchLevel(user.id, localStream);
   inCall = true;
   try {
     await connectRealtime();
@@ -1461,7 +1471,7 @@ async function startCall() {
     return;
   }
   $('join-overlay').classList.add('hidden');
-  $('mute-btn').disabled = false;
+  $('mute-btn').disabled = !micTrack;
   recompute();
 }
 
