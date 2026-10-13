@@ -467,3 +467,33 @@ label.check input { width: auto; }
 /* Aviso quando o navegador bloqueia o som da call */
 .audio-unlock { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 70; display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.65rem 1.1rem; background: var(--accent); color: #fff; border: 0; border-radius: var(--radius); font: inherit; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); max-width: calc(100% - 32px); }
 .audio-unlock.hidden { display: none; }
+
+/* =====================================================================
+   Mixer de música (mestre)
+   ===================================================================== */
+
+#yt-holder > div, #yt-holder iframe { position: absolute; left: 0; top: 0; width: 200px; height: 113px; }
+.mixer { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.85rem; }
+.mixer-empty { padding: 0.9rem; border: 1px dashed var(--line-strong); border-radius: var(--radius); text-align: center; }
+.track { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 0.55rem 0.6rem 0.5rem; transition: border-color 0.2s ease; }
+.track.playing { border-color: rgba(200, 85, 61, 0.55); }
+.track.stopped { opacity: 0.75; }
+.track-top { display: flex; align-items: center; gap: 0.5rem; }
+.track-play { flex: none; width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 999px; }
+.track.playing .track-play { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.track-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.track-title { font-size: 0.9rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-time { font-size: 0.74rem; color: var(--muted); }
+.track-bar { height: 3px; margin: 0.45rem 0 0.4rem; border-radius: 2px; background: var(--line); overflow: hidden; }
+.track-bar span { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
+.track:not(.playing) .track-bar span { background: var(--muted); }
+.track-controls { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.chip-toggle { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.55rem; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--line-strong); background: transparent; color: var(--text-2); }
+.chip-toggle.on { border-color: rgba(200, 85, 61, 0.7); background: var(--accent-soft); color: var(--text); }
+.chip-toggle:disabled { opacity: 0.4; }
+.track-vol { display: inline-flex; align-items: center; gap: 0.3rem; flex: 1; min-width: 90px; color: var(--muted); }
+.track-vol input { flex: 1; min-width: 0; }
+.track-order { display: inline-flex; gap: 0.05rem; margin-left: auto; }
+.mixer-foot { align-items: center; justify-content: space-between; margin-top: 0.75rem; }
+.check { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.85rem; color: var(--text-2); cursor: pointer; }
+.check input { width: auto; margin: 0; }

@@ -5,6 +5,7 @@ import { ICE_SERVERS } from './config.js';
 let iceServers = ICE_SERVERS;
 import { computeRouting, normalizeMasterTarget } from './audioRules.js';
 import { effectiveScene, parseYouTube, targetIncludes } from './sceneRules.js';
+import { formatTime, trackEnded, trackPosition, tracksForDest, tracksForZone } from './musicRules.js';
 import { hydrateIcons, icon } from './icons.js';
 import { describeDice, diceRange, parseDice } from './dice.js';
 
@@ -79,9 +80,10 @@ const myZoneId = () => (playerById(user.id) || {}).zoneId ?? null;
 // ---------------------------------------------------------------------------
 
 const SCENE_COLS = 'scene_media_id, ambient_youtube, scene_caption, ambient_volume';
+const TRACK_COLS = 'id, zone_id, title, youtube, position, volume, loop, chain, status, offset_s, started_at, duration_s';
 
 async function loadData() {
-  const [roomRes, zonesRes, membersRes, mediaRes] = await Promise.all([
+  const [roomRes, zonesRes, membersRes, mediaRes, tracksRes] = await Promise.all([
     supabase
       .from('rooms')
       .select(`id, name, description, master_id, master_target, ${SCENE_COLS}, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)`)
@@ -90,12 +92,13 @@ async function loadData() {
     supabase.from('zones').select(`id, name, position, ${SCENE_COLS}`).eq('room_id', roomId).eq('archived', false).order('position').order('id'),
     supabase.from('room_members').select('user_id, zone_id, whisper_to_master, whisper_requested, profile:profiles(display_name)').eq('room_id', roomId),
     supabase.from('room_media').select('id, kind, name, storage_path, created_at').eq('room_id', roomId).order('created_at'),
+    supabase.from('music_tracks').select(TRACK_COLS).eq('room_id', roomId).eq('archived', false).order('position'),
   ]);
-  const error = roomRes.error || zonesRes.error || membersRes.error || mediaRes.error;
+  const error = roomRes.error || zonesRes.error || membersRes.error || mediaRes.error || tracksRes.error;
   if (error) throw error;
   if (!roomRes.data) return null;
   await signMediaUrls(mediaRes.data);
-  return { room: roomRes.data, zones: zonesRes.data, members: membersRes.data, media: mediaRes.data };
+  return { room: roomRes.data, zones: zonesRes.data, members: membersRes.data, media: mediaRes.data, tracks: tracksRes.data };
 }
 
 /** Gera links temporários (6h) para os arquivos da biblioteca que ainda não têm. */
@@ -241,6 +244,7 @@ function connectRealtime(firstTimeout = 25000) {
       .on('broadcast', { event: 'sfx' }, ({ payload }) => onSfx(payload))
       .on('broadcast', { event: 'sfx-stop' }, () => stopAllSfx())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dice_rolls', filter: `room_id=eq.${roomId}` }, () => scheduleRolls())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'music_tracks', filter: `room_id=eq.${roomId}` }, () => scheduleTracks())
       .on('presence', { event: 'sync' }, onPresenceSync)
       .subscribe(async (status, err) => {
         if (ch !== channel) return;
@@ -778,7 +782,7 @@ function updateEnvironment(scene, zone) {
   if (placeKey && placeKey !== locationKey) showLocation(zone ? zone.name : db.room.name);
   locationKey = placeKey;
 
-  updateMusic(scene);
+  syncMusic();
 }
 
 function setBackground(visual, url, key) {
@@ -859,14 +863,25 @@ function wakeUi() {
 ['pointermove', 'pointerdown', 'keydown', 'wheel', 'focusin'].forEach((ev) => document.addEventListener(ev, wakeUi, { passive: true }));
 wakeUi();
 
-// ----- Música do ambiente (YouTube) -----
+// ----- Música (mixer do mestre, faixas do YouTube) -----
+// Cada faixa ativa do ambiente vira um player escondido do YouTube. O estado
+// (tocando, pausada, posição, volume, repetir) vem do banco; aqui só seguimos.
 
 let ytApi = null;
-let ytPlayer = null;
-let musicKey = null;
-let musicVolume = 60;
+const musicPlayers = new Map(); // trackId -> { key, player, ready, reported }
 let musicMuted = readStored('rpg-music-muted', false);
-let musicCheck = null;
+let musicBlocked = false;
+let musicBlockTimer = null;
+let clockSkew = 0; // relógio do servidor - relógio local (ms)
+const serverNow = () => Date.now() + clockSkew;
+
+async function syncClock() {
+  const t0 = Date.now();
+  const { data, error } = await supabase.rpc('server_now');
+  if (error || !data) return;
+  const t1 = Date.now();
+  clockSkew = Date.parse(data) - (t0 + t1) / 2;
+}
 
 function loadYouTubeApi() {
   if (!ytApi) {
@@ -881,87 +896,206 @@ function loadYouTubeApi() {
   return ytApi;
 }
 
-function applyMusicVolume() {
-  if (!ytPlayer || !ytPlayer.setVolume) return;
-  if (musicMuted) ytPlayer.mute();
-  else {
-    ytPlayer.unMute();
-    ytPlayer.setVolume(musicVolume);
-  }
+/** Faixas que este aparelho deve tocar agora. */
+function myMusicTracks() {
+  if (!db || !inCall) return [];
+  if (isMaster) return musicMonitor ? tracksForDest(db.tracks, musicDest) : [];
+  return tracksForZone(db.tracks, myZoneId());
+}
+
+function setMusicBlocked(blocked) {
+  if (blocked && !musicBlocked) toast('Toque em "Toque para ativar a música" para ouvir o ambiente.', 5000);
+  musicBlocked = blocked;
+  renderMusicChip();
+}
+
+function renderMusicChip() {
+  if (isMaster) return;
+  const active = myMusicTracks().filter((t) => t.status === 'playing');
+  $('music-chip').classList.toggle('hidden', !active.length);
+  $('music-chip').classList.toggle('blocked', musicBlocked);
+  const names = active.map((t) => t.title || 'Música ambiente');
+  $('music-label').textContent = musicBlocked ? 'Toque para ativar a música' : names.join(' · ');
   $('music-toggle').innerHTML = icon(musicMuted ? 'volumeOff' : 'volume', 15);
   $('music-toggle').title = musicMuted ? 'Ativar música' : 'Silenciar música';
 }
 
-function setMusicBlocked(blocked) {
-  if (blocked && !$('music-chip').classList.contains('blocked')) toast('Toque em "Toque para ativar a música" para ouvir o ambiente.', 5000);
-  $('music-chip').classList.toggle('blocked', blocked);
-  $('music-label').textContent = blocked ? 'Toque para ativar a música' : 'Música ambiente';
+function destroyMusicPlayer(id) {
+  const entry = musicPlayers.get(id);
+  if (!entry) return;
+  try {
+    if (entry.player && entry.player.destroy) entry.player.destroy();
+  } catch {}
+  const el = document.getElementById(`yt-${id}`);
+  if (el) el.remove();
+  musicPlayers.delete(id);
 }
 
 function destroyMusic() {
-  clearTimeout(musicCheck);
-  if (ytPlayer && ytPlayer.destroy) ytPlayer.destroy();
-  ytPlayer = null;
-  $('yt-holder').innerHTML = '<div id="yt-player"></div>';
+  for (const id of [...musicPlayers.keys()]) destroyMusicPlayer(id);
+  clearTimeout(musicBlockTimer);
+  musicBlocked = false;
 }
 
-async function updateMusic(scene) {
-  const parsed = inCall && scene && scene.youtube ? parseYouTube(scene.youtube) : null;
-  const key = parsed ? `${parsed.videoId}|${parsed.listId}` : null;
-  musicVolume = Math.round(Math.min(1, (scene ? scene.volume : 0.6) * playerSceneVolume) * 100);
-  $('music-chip').classList.toggle('hidden', !key);
-  applyMusicVolume();
-  if (key === musicKey) return;
-  musicKey = key;
-  destroyMusic();
-  if (!key) return;
+/** Ajusta um player ao estado da faixa (play/pausa, volume, posição). */
+function applyTrack(entry, track) {
+  const p = entry.player;
+  if (!entry.ready || !p || !p.getPlayerState) return;
+  const YT = window.YT;
+  const vol = Math.round(Math.min(1, (Number(track.volume) || 0) * playerSceneVolume) * 100);
+  if (musicMuted || vol === 0) p.mute();
+  else {
+    p.unMute();
+    p.setVolume(vol);
+  }
+  const now = serverNow();
+  const shouldPlay = track.status === 'playing' && !trackEnded(track, now);
+  const state = p.getPlayerState();
+  if (!entry.isList) {
+    const want = trackPosition(track, now);
+    const cur = p.getCurrentTime ? p.getCurrentTime() : 0;
+    if (Math.abs(cur - want) > 2.5 && !(track.duration_s && want >= track.duration_s - 0.5)) p.seekTo(want, true);
+  }
+  if (shouldPlay && state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.BUFFERING) p.playVideo();
+  if (!shouldPlay && (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING)) p.pauseVideo();
+}
 
+async function createMusicPlayer(track, parsed, key) {
+  const entry = { key, player: null, ready: false, reported: false, isList: Boolean(parsed.listId && !parsed.videoId) };
+  musicPlayers.set(track.id, entry);
+  const holder = document.createElement('div');
+  holder.id = `yt-${track.id}`;
+  $('yt-holder').appendChild(holder);
   const YT = await loadYouTubeApi();
-  if (musicKey !== key) return;
-  const playerVars = { autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, rel: 0, fs: 0, iv_load_policy: 3, loop: 1 };
-  if (parsed.listId) Object.assign(playerVars, { listType: 'playlist', list: parsed.listId });
-  else playerVars.playlist = parsed.videoId; // necessário para repetir um vídeo só
-  ytPlayer = new YT.Player('yt-player', {
+  if (musicPlayers.get(track.id) !== entry) return;
+  const playerVars = { autoplay: 0, controls: 0, disablekb: 1, playsinline: 1, rel: 0, fs: 0, iv_load_policy: 3 };
+  if (parsed.listId) Object.assign(playerVars, { listType: 'playlist', list: parsed.listId, loop: 1 });
+  entry.player = new YT.Player(holder.id, {
     width: 200,
     height: 113,
     videoId: parsed.videoId || undefined,
     playerVars,
     events: {
-      onReady: (e) => {
-        applyMusicVolume();
-        e.target.playVideo();
-        clearTimeout(musicCheck);
-        musicCheck = setTimeout(() => {
-          const st = ytPlayer && ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
-          if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING) setMusicBlocked(true);
-        }, 4000);
+      onReady: () => {
+        entry.ready = true;
+        const t = (db.tracks || []).find((x) => x.id === track.id);
+        if (t) applyTrack(entry, t);
       },
       onStateChange: (e) => {
-        if (e.data === YT.PlayerState.PLAYING) setMusicBlocked(false);
-        if (e.data === YT.PlayerState.ENDED && !parsed.listId) {
-          e.target.seekTo(0);
+        const t = (db.tracks || []).find((x) => x.id === track.id);
+        if (e.data === YT.PlayerState.PLAYING) {
+          setMusicBlocked(false);
+          // Informa duração e título uma vez (o mestre precisa para saber quando a faixa acaba)
+          if (!entry.reported && t && !entry.isList) {
+            const duration = e.target.getDuration ? e.target.getDuration() : 0;
+            const data = e.target.getVideoData ? e.target.getVideoData() : {};
+            if (duration > 0 && (!t.duration_s || !t.title)) {
+              entry.reported = true;
+              supabase.rpc('report_track_meta', { p_track_id: t.id, p_duration: duration, p_title: (data && data.title) || '' }).then(() => {});
+            }
+          }
+        }
+        // Fim do vídeo: com repetição volta ao começo; sem repetição, o mestre passa para a próxima
+        if (e.data === YT.PlayerState.ENDED && t && t.loop && !entry.isList) {
+          e.target.seekTo(0, true);
           e.target.playVideo();
         }
       },
       onError: (e) => {
-        // 101/150: o dono do vídeo não permite tocar fora do YouTube
-        $('music-label').textContent = e && (e.data === 101 || e.data === 150) ? 'Este vídeo não permite tocar aqui' : 'Música indisponível';
+        const t = (db.tracks || []).find((x) => x.id === track.id);
+        if (!isMaster) toast(`${(t && t.title) || 'Uma música'}: ${e && (e.data === 101 || e.data === 150) ? 'o dono do vídeo não permite tocar fora do YouTube' : 'indisponível'}.`, 6000);
       },
     },
   });
+}
+
+/** Cria, ajusta e remove players conforme as faixas do ambiente. */
+function syncMusic() {
+  const wanted = myMusicTracks().filter((t) => t.status !== 'stopped');
+  const wantedIds = new Set();
+  for (const track of wanted) {
+    const parsed = parseYouTube(track.youtube);
+    if (!parsed) continue;
+    const key = `${parsed.videoId}|${parsed.listId}`;
+    wantedIds.add(track.id);
+    const entry = musicPlayers.get(track.id);
+    if (entry && entry.key !== key) destroyMusicPlayer(track.id);
+    if (!musicPlayers.has(track.id)) {
+      if (track.status === 'playing') createMusicPlayer(track, parsed, key);
+      continue;
+    }
+    applyTrack(musicPlayers.get(track.id), track);
+  }
+  for (const id of [...musicPlayers.keys()]) if (!wantedIds.has(id)) destroyMusicPlayer(id);
+
+  // Navegador bloqueou o som automático? Avisa para tocar na tela.
+  clearTimeout(musicBlockTimer);
+  if (!isMaster && wanted.some((t) => t.status === 'playing')) {
+    musicBlockTimer = setTimeout(() => {
+      const YT = window.YT;
+      const stuck = [...musicPlayers.entries()].some(([id, en]) => {
+        const t = (db.tracks || []).find((x) => x.id === id);
+        if (!t || t.status !== 'playing' || trackEnded(t, serverNow()) || !en.ready || !YT) return false;
+        const st = en.player.getPlayerState();
+        return st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING;
+      });
+      if (stuck) setMusicBlocked(true);
+    }, 4000);
+  }
+  renderMusicChip();
 }
 
 $('music-toggle').onclick = (e) => {
   e.stopPropagation();
   musicMuted = !musicMuted;
   store('rpg-music-muted', musicMuted);
-  applyMusicVolume();
+  syncMusic();
 };
 $('music-chip').onclick = () => {
-  if (!$('music-chip').classList.contains('blocked') || !ytPlayer) return;
-  applyMusicVolume();
-  ytPlayer.playVideo();
+  if (!musicBlocked) return;
+  for (const entry of musicPlayers.values()) if (entry.ready && entry.player.playVideo) entry.player.playVideo();
+  setTimeout(syncMusic, 300);
 };
+
+// Carrega as faixas da sala (separado do resto para mudar rápido)
+let tracksTimer = null;
+function scheduleTracks() {
+  clearTimeout(tracksTimer);
+  tracksTimer = setTimeout(loadTracks, 60);
+}
+async function loadTracks() {
+  const { data, error } = await supabase
+    .from('music_tracks')
+    .select(TRACK_COLS)
+    .eq('room_id', roomId)
+    .eq('archived', false)
+    .order('position');
+  if (error) return console.error('tracks', error);
+  if (!db) return;
+  db.tracks = data;
+  syncMusic();
+  if (isMaster) renderMixer();
+}
+
+// A cada segundo: barras de progresso do mixer, correção de atraso e fim das faixas
+const endedSent = new Set();
+let musicTicks = 0;
+setInterval(() => {
+  if (!db || !db.tracks) return;
+  if (isMaster) {
+    updateMixerProgress();
+    // O mestre avisa o banco quando uma faixa termina, para tocar a próxima
+    for (const t of db.tracks) {
+      const sig = `${t.id}:${t.started_at}`;
+      if (trackEnded(t, serverNow()) && !endedSent.has(sig)) {
+        endedSent.add(sig);
+        supabase.rpc('music_control', { p_track_id: t.id, p_action: 'ended' }).then(({ error }) => error && console.warn('ended', error.message));
+      }
+    }
+  }
+  musicTicks += 1;
+  if (inCall && musicPlayers.size && musicTicks % 4 === 0) syncMusic();
+}, 1000);
 
 $('stage-full').onclick = () => {
   const stage = $('stage');
@@ -1527,7 +1661,7 @@ async function startCall() {
     audioCtx = null;
   }
   if (localStream) watchLevel(user.id, localStream);
-  await loadIceServers();
+  await Promise.all([loadIceServers(), syncClock()]);
   inCall = true;
   try {
     await connectRealtime();
@@ -1557,7 +1691,6 @@ function stopCall() {
   screenAudioTrack = null;
   closeAllPeers();
   stopAllSfx();
-  musicKey = null;
   destroyMusic();
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
   if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
@@ -1751,11 +1884,6 @@ function setupMasterControls() {
     renderSceneEditor();
   };
   $('scene-caption').oninput = (e) => (sceneDraft.caption = e.target.value);
-  $('scene-youtube').oninput = (e) => {
-    sceneDraft.youtube = e.target.value.trim();
-    renderYoutubeHint();
-  };
-  $('scene-volume').oninput = (e) => (sceneDraft.volume = Number(e.target.value));
   $('scene-apply').onclick = () => applyScene(sceneDraft);
   $('scene-clear').onclick = () => applyScene({ visualId: null, youtube: '', caption: '', volume: 0.6 }, true);
 
@@ -1803,9 +1931,6 @@ function loadSceneDraft() {
     volume: typeof src.ambient_volume === 'number' ? src.ambient_volume : 0.6,
   };
   $('scene-caption').value = sceneDraft.caption;
-  $('scene-youtube').value = sceneDraft.youtube;
-  renderYoutubeHint();
-  $('scene-volume').value = sceneDraft.volume;
 }
 
 function openSceneEditor(zoneId) {
@@ -1816,20 +1941,11 @@ function openSceneEditor(zoneId) {
   $('master-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function renderYoutubeHint() {
-  const value = $('scene-youtube').value.trim();
-  const hint = $('scene-youtube-hint');
-  if (!value) hint.textContent = 'Toca em loop para quem estiver no ambiente. Aceita vídeo ou playlist.';
-  else if (parseYouTube(value)) hint.innerHTML = `Link reconhecido. <a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">Abrir no YouTube</a>`;
-  else hint.textContent = 'Esse link não parece ser do YouTube.';
-}
-
 async function applyScene(draft, clear = false) {
-  if (draft.youtube && !parseYouTube(draft.youtube)) return toast('Cole um link válido do YouTube.');
   const ok = await rpc('set_environment', {
     p_zone_id: sceneDest === 'room' ? null : sceneDest,
     p_scene_media_id: draft.visualId,
-    p_ambient_youtube: draft.youtube || null,
+    p_ambient_youtube: null, // a música agora fica no mixer (aba Música)
     p_caption: draft.caption,
     p_ambient_volume: draft.volume,
   });
@@ -1895,6 +2011,7 @@ function setupPlayerControls() {
     store('rpg-scene-volume', playerSceneVolume);
     updateStage();
     applyAllRouting();
+    syncMusic();
   };
 }
 
@@ -1940,13 +2057,14 @@ const isZoneTarget = (zoneId) => state.masterTarget && state.masterTarget.type =
 
 function sceneSummary(zone) {
   const scene = effectiveScene(db.room, zone);
-  if (!scene) return '<span class="muted">Sem cena</span>';
-  const visual = scene.visualId && mediaById(scene.visualId);
+  const playing = tracksForZone(db.tracks, zone ? zone.id : null).filter((t) => t.status === 'playing');
+  if (!scene && !playing.length) return '<span class="muted">Sem cena</span>';
+  const visual = scene && scene.visualId && mediaById(scene.visualId);
   const parts = [];
   if (visual) parts.push(`<span>${icon(visual.kind === 'video' ? 'film' : 'image', 13)}${escapeHtml(visual.name)}</span>`);
-  if (scene.youtube) parts.push(`<span>${icon('music', 13)}Música do YouTube</span>`);
-  if (!visual && scene.caption) parts.push(`<span>“${escapeHtml(scene.caption.slice(0, 40))}”</span>`);
-  if (scene.from === 'room') parts.push('<span class="muted">(cena padrão)</span>');
+  if (playing.length) parts.push(`<span>${icon('music', 13)}${escapeHtml(playing.map((t) => t.title || 'Música').join(' · ').slice(0, 60))}</span>`);
+  if (scene && !visual && scene.caption) parts.push(`<span>“${escapeHtml(scene.caption.slice(0, 40))}”</span>`);
+  if (scene && scene.from === 'room') parts.push('<span class="muted">(cena padrão)</span>');
   return parts.join('');
 }
 
@@ -1998,6 +2116,8 @@ function render() {
     renderShareControls();
     renderSceneEditor();
     renderSfx();
+    renderMixer();
+    syncMusic();
     renderDice();
   } else {
     renderHearing();
@@ -2125,6 +2245,170 @@ function renderSceneEditor() {
     : '<div class="hint">A biblioteca está vazia.</div>';
 }
 
+// ---------------------------------------------------------------------------
+// Mixer de música (mestre)
+// ---------------------------------------------------------------------------
+
+let musicDest = 'room'; // 'room' (cena padrão) ou id do ambiente
+let musicMonitor = readStored('rpg-music-monitor', false);
+let mixerPending = false; // re-render adiado enquanto o mestre arrasta um volume
+
+function mixerTracks() {
+  return tracksForDest(db.tracks, musicDest);
+}
+
+function musicControl(trackId, action, value) {
+  return supabase.rpc('music_control', { p_track_id: trackId, p_action: action, p_value: value === undefined ? null : value }).then(({ error }) => {
+    if (error) toast(friendlyError(error));
+    scheduleTracks();
+    return !error;
+  });
+}
+
+function trackTimeText(t) {
+  const now = serverNow();
+  const pos = trackPosition(t, now);
+  return t.duration_s ? `${formatTime(pos)} / ${formatTime(t.duration_s)}` : formatTime(pos);
+}
+
+function renderMixer() {
+  if (!isMaster || !db) return;
+  if (musicDest !== 'room' && !db.zones.some((z) => z.id === musicDest)) musicDest = 'room';
+  const count = (dest) => tracksForDest(db.tracks, dest).filter((t) => t.status === 'playing').length;
+  const label = (name, dest) => `${escapeHtml(name)}${count(dest) ? ` (${count(dest)} tocando)` : ''}`;
+  $('music-dest').innerHTML = [
+    `<option value="room" ${musicDest === 'room' ? 'selected' : ''}>${label('Cena padrão', 'room')}</option>`,
+    ...db.zones.map((z) => `<option value="${z.id}" ${musicDest === z.id ? 'selected' : ''}>${label(z.name, z.id)}</option>`),
+  ].join('');
+  $('mixer-monitor').checked = musicMonitor;
+
+  const mixer = $('mixer');
+  if (mixer.contains(document.activeElement) && document.activeElement.type === 'range') {
+    mixerPending = true;
+    return;
+  }
+  mixerPending = false;
+  const list = mixerTracks();
+  if (!list.length) {
+    mixer.innerHTML = '<div class="hint mixer-empty">Nenhuma faixa aqui. Cole um link do YouTube acima.</div>';
+    return;
+  }
+  mixer.innerHTML = list
+    .map((t, i) => {
+      const playing = t.status === 'playing' && !trackEnded(t, serverNow());
+      const pct = t.duration_s ? Math.min(100, (trackPosition(t, serverNow()) / t.duration_s) * 100) : 0;
+      const isList = (parseYouTube(t.youtube) || {}).listId && !(parseYouTube(t.youtube) || {}).videoId;
+      return `<div class="track ${playing ? 'playing' : t.status}" data-track="${t.id}">
+        <div class="track-top">
+          <button class="track-play icon-only" data-mix="toggle" title="${playing ? 'Pausar' : 'Tocar'}">${icon(playing ? 'pause' : 'play', 16)}</button>
+          <div class="track-info">
+            <span class="track-title" title="${escapeHtml(t.youtube)}">${escapeHtml(t.title || `Faixa ${i + 1}`)}</span>
+            <span class="track-time mono" data-time>${isList ? 'Playlist' : trackTimeText(t)}</span>
+          </div>
+          <button class="sm quiet icon-only" data-mix="stop" title="Parar e voltar ao início" ${t.status === 'stopped' ? 'disabled' : ''}>${icon('stop', 14)}</button>
+          ${i < list.length - 1 ? `<button class="sm quiet icon-only" data-mix="next" title="Ir para a próxima faixa">${icon('next', 14)}</button>` : ''}
+        </div>
+        <div class="track-bar"><span data-bar style="width:${pct}%"></span></div>
+        <div class="track-controls">
+          <button class="chip-toggle ${t.loop ? 'on' : ''}" data-mix="loop" title="Repetir esta faixa sem parar">${icon('repeat', 13)}Repetir</button>
+          <button class="chip-toggle ${t.chain && !t.loop ? 'on' : ''}" data-mix="chain" title="Ao terminar, tocar a faixa de baixo" ${t.loop ? 'disabled' : ''}>${icon('next', 13)}Depois</button>
+          <span class="track-vol" title="Volume desta faixa">${icon('volume', 14)}<input type="range" min="0" max="1" step="0.05" value="${t.volume}" data-mix-volume></span>
+          <span class="track-order">
+            <button class="sm quiet icon-only" data-mix="up" title="Subir" ${i === 0 ? 'disabled' : ''}>${icon('up', 14)}</button>
+            <button class="sm quiet icon-only" data-mix="down" title="Descer" ${i === list.length - 1 ? 'disabled' : ''}>${icon('down', 14)}</button>
+            <button class="sm quiet icon-only" data-mix="remove" title="Remover faixa">${icon('trash', 14)}</button>
+          </span>
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+/** Atualiza só tempo e barra (a cada segundo), sem redesenhar o mixer. */
+function updateMixerProgress() {
+  if (!isMaster || !db) return;
+  const now = serverNow();
+  for (const row of document.querySelectorAll('#mixer .track')) {
+    const t = db.tracks.find((x) => x.id === Number(row.dataset.track));
+    if (!t || t.status !== 'playing') continue;
+    const time = row.querySelector('[data-time]');
+    if (time && time.textContent !== 'Playlist') time.textContent = trackTimeText(t);
+    const bar = row.querySelector('[data-bar]');
+    if (bar && t.duration_s) bar.style.width = `${Math.min(100, (trackPosition(t, now) / t.duration_s) * 100)}%`;
+  }
+}
+
+function setupMixerControls() {
+  $('music-dest').onchange = (e) => {
+    musicDest = e.target.value === 'room' ? 'room' : Number(e.target.value);
+    renderMixer();
+    syncMusic();
+  };
+  $('track-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = $('track-url').value.trim();
+    if (!parseYouTube(url)) return toast('Cole um link válido do YouTube (vídeo ou playlist).');
+    const { error } = await supabase.rpc('add_track', {
+      p_room_id: roomId,
+      p_zone_id: musicDest === 'room' ? null : musicDest,
+      p_youtube: url,
+      p_title: $('track-title').value.trim(),
+    });
+    if (error) return toast(friendlyError(error));
+    $('track-url').value = '';
+    $('track-title').value = '';
+    scheduleTracks();
+  });
+  $('mixer').onclick = async (e) => {
+    const btn = e.target.closest('button[data-mix]');
+    if (!btn) return;
+    const id = Number(btn.closest('[data-track]').dataset.track);
+    const t = db.tracks.find((x) => x.id === id);
+    if (!t) return;
+    const action = btn.dataset.mix;
+    if (action === 'toggle') {
+      const playing = t.status === 'playing' && !trackEnded(t, serverNow());
+      return musicControl(id, playing ? 'pause' : trackEnded(t, serverNow()) ? 'restart' : 'play');
+    }
+    if (action === 'next') {
+      const list = mixerTracks();
+      const next = list[list.findIndex((x) => x.id === id) + 1];
+      await musicControl(id, 'stop');
+      if (next) musicControl(next.id, 'restart');
+      return;
+    }
+    if (action === 'remove' && !confirm(`Remover "${t.title || 'esta faixa'}" do mixer?`)) return;
+    musicControl(id, action);
+  };
+  let volTimer = null;
+  $('mixer').oninput = (e) => {
+    if (!e.target.matches('[data-mix-volume]')) return;
+    const id = Number(e.target.closest('[data-track]').dataset.track);
+    const value = Number(e.target.value);
+    const t = db.tracks.find((x) => x.id === id);
+    if (t) t.volume = value; // aplica na hora para quem está ouvindo aqui
+    syncMusic();
+    clearTimeout(volTimer);
+    volTimer = setTimeout(() => musicControl(id, 'volume', value), 250);
+  };
+  $('mixer').onchange = (e) => {
+    if (!e.target.matches('[data-mix-volume]')) return;
+    e.target.blur();
+    if (mixerPending) setTimeout(renderMixer, 300);
+  };
+  $('mixer-pause-all').onclick = () => {
+    const playing = mixerTracks().filter((t) => t.status === 'playing');
+    if (!playing.length) return toast('Nada tocando aqui.');
+    playing.forEach((t) => musicControl(t.id, 'pause'));
+  };
+  $('mixer-monitor').onchange = (e) => {
+    musicMonitor = e.target.checked;
+    store('rpg-music-monitor', musicMonitor);
+    if (musicMonitor && !inCall) toast('Entre na call para ouvir.');
+    syncMusic();
+  };
+}
+
 function renderSfx() {
   $('sfx-target').innerHTML = targetOptions(sfxTarget, { players: true });
   const audios = db.media.filter((m) => m.kind === 'audio');
@@ -2184,7 +2468,10 @@ if (!db) {
   $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
   setupDiceControls();
   loadRolls();
-  if (isMaster) setupMasterControls();
+  if (isMaster) {
+    setupMasterControls();
+    setupMixerControls();
+  }
   else setupPlayerControls();
   $('join-btn').onclick = startCall;
   recompute();

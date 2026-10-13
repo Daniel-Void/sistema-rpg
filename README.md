@@ -34,14 +34,14 @@ O mestre clica em **Compartilhar tela** na barra superior e escolhe para quem: *
 Na aba **Cena**, o mestre escolhe o ambiente (ou a **cena padrão**, para quem estiver em ambiente sem cena própria) e define:
 
 - **Imagem do ambiente:** enviada por ele para a biblioteca da sala (até 50 MB; vídeo em loop também funciona).
-- **Música do ambiente:** um **link do YouTube** (vídeo ou playlist), que toca em loop, só o áudio, para quem estiver naquele ambiente. O campo avisa se o link não for do YouTube.
+- **Mixer de música (aba Música):** cada ambiente (ou a cena padrão) tem uma lista de faixas do YouTube. Cada faixa é um canal: tocar/pausar, parar, **Repetir**, volume próprio, subir/descer na lista e **Depois** (ao terminar, toca a faixa de baixo). Várias faixas podem tocar juntas (música + chuva), e dá para pausar uma e retomar outra. "Ouvir aqui" deixa o mestre escutar o que está montando.
 - **Texto na tela** e **volume** da música.
 
 O ícone de imagem no card do ambiente abre a cena dele direto. Cada jogador tem um controle de volume e um botão para silenciar a música. Se o navegador bloquear o som automático, aparece "Toque para ativar a música".
 
 Na aba **Sons**, o mestre dispara **efeitos sonoros** (áudios enviados para a biblioteca) para todos, para um ambiente ou para um jogador. **Parar efeitos** corta tudo.
 
-> A música é tocada pelo player do YouTube em cada navegador (não fica sincronizada entre os jogadores). Vídeos cujo dono proíbe a reprodução fora do YouTube mostram "Este vídeo não permite tocar aqui"; nesse caso, escolha outro link.
+> Cada navegador toca a faixa pelo player do YouTube, na mesma posição para todos (o relógio do servidor sincroniza). Vídeos cujo dono proíbe a reprodução fora do YouTube avisam o jogador; nesse caso, escolha outro link.
 
 ## Funcionalidade 4: dados
 

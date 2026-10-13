@@ -67,6 +67,7 @@
         <div class="tabs" role="tablist">
           <button role="tab" data-tab="voz" aria-selected="true">Voz</button>
           <button role="tab" data-tab="cena" aria-selected="false">Cena</button>
+          <button role="tab" data-tab="musica" aria-selected="false">Música</button>
           <button role="tab" data-tab="sons" aria-selected="false">Sons</button>
           <button role="tab" data-tab="dados" aria-selected="false">Dados <span id="dice-badge" class="badge-count hidden"></span></button>
         </div>
@@ -90,13 +91,7 @@
           <div id="scene-visuals" class="thumbs"></div>
           <label for="scene-caption">Texto na tela</label>
           <input id="scene-caption" maxlength="200" placeholder="Uma névoa fria cobre as árvores">
-          <label for="scene-youtube">Música do ambiente (link do YouTube)</label>
-          <input id="scene-youtube" type="url" inputmode="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
-          <p class="hint" id="scene-youtube-hint" style="margin-top:0.35rem">Toca em loop para quem estiver no ambiente. Aceita vídeo ou playlist.</p>
-          <div class="inline" style="align-items:center;margin-top:0.6rem">
-            <span class="hint">Volume</span>
-            <input type="range" id="scene-volume" min="0" max="1" step="0.05" value="0.6">
-          </div>
+          <p class="hint" style="margin-top:0.5rem">A música do ambiente fica na aba Música.</p>
           <div class="inline" style="margin-top:1rem">
             <button id="scene-apply" class="primary">Aplicar cena</button>
             <button id="scene-clear">Limpar</button>
@@ -109,6 +104,24 @@
           </div>
           <p class="hint" id="upload-status">Imagens dos ambientes e áudios de efeitos, até 50 MB.</p>
           <div id="media-list" class="media-list"></div>
+        </div>
+
+        <div data-panel="musica" hidden>
+          <label for="music-dest" style="margin-top:0">Faixas de</label>
+          <select id="music-dest"></select>
+          <form id="track-form" onsubmit="return false" style="margin-top:0.6rem">
+            <input id="track-url" type="url" inputmode="url" placeholder="Link do YouTube" autocomplete="off" required>
+            <div class="inline" style="margin-top:0.45rem">
+              <input id="track-title" maxlength="120" placeholder="Nome (opcional)" autocomplete="off">
+              <button type="submit" class="primary sm"><i data-icon="plus" data-size="14"></i>Adicionar</button>
+            </div>
+          </form>
+          <div id="mixer" class="mixer"></div>
+          <div class="inline mixer-foot">
+            <button id="mixer-pause-all" class="sm"><i data-icon="pause" data-size="14"></i>Pausar tudo</button>
+            <label class="check"><input type="checkbox" id="mixer-monitor"> Ouvir aqui</label>
+          </div>
+          <p class="hint" style="margin-top:0.5rem">Várias faixas podem tocar juntas. Com <b>Depois</b> ligado, ao terminar começa a faixa de baixo. A cena padrão toca para quem está em ambiente sem faixas próprias.</p>
         </div>
 
         <div data-panel="sons" hidden>
