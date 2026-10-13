@@ -839,6 +839,26 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// No ambiente imersivo a interface esmaece depois de alguns segundos parada,
+// e volta com qualquer movimento, toque ou tecla. Não esmaece enquanto a
+// pessoa digita ou tem o mouse sobre um painel.
+const IDLE_MS = 6000;
+let idleTimer = null;
+function wakeUi() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    const active = document.activeElement;
+    const typing = active && active.closest && active.closest('input, textarea, select');
+    const hovering = document.querySelector('.side:hover, .topbar:hover');
+    const overlay = !$('join-overlay').classList.contains('hidden') || !$('dice-prompt').classList.contains('hidden');
+    if (typing || hovering || overlay) return wakeUi();
+    if (document.body.classList.contains('immersive')) document.body.classList.add('idle');
+  }, IDLE_MS);
+}
+['pointermove', 'pointerdown', 'keydown', 'wheel', 'focusin'].forEach((ev) => document.addEventListener(ev, wakeUi, { passive: true }));
+wakeUi();
+
 // ----- Música do ambiente (YouTube) -----
 
 let ytApi = null;

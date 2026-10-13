@@ -327,14 +327,43 @@ body.immersive .scene-text:not(:empty) {
 }
 @keyframes scene-text-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-/* Interface sobre o ambiente */
-body.immersive .topbar, body.immersive .room-layout { position: relative; z-index: 1; }
-body.immersive .topbar { background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0)); border-bottom-color: transparent; }
+/* Interface sobre o ambiente: vidro escuro translúcido, o ambiente aparece por trás */
+body.immersive .topbar, body.immersive .room-layout { position: relative; z-index: 1; transition: opacity 0.9s ease; }
+body.immersive .topbar { background: linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0)); border-bottom-color: transparent; }
 body.immersive .room-main { min-height: calc(100vh - 92px); justify-content: flex-end; }
 body.immersive .panel,
 body.immersive .zone,
 body.immersive .status-box,
 body.immersive .master-row .person {
+  background: rgba(14, 13, 12, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  backdrop-filter: blur(14px) saturate(1.15);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+body.immersive .status-box.whisper { background: rgba(48, 52, 82, 0.5); border-color: rgba(143, 155, 214, 0.45); }
+body.immersive .zone { min-height: 0; }
+body.immersive .zone-foot { border-top-color: rgba(255, 255, 255, 0.07); }
+body.immersive .side { max-height: calc(100vh - 84px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+body.immersive input, body.immersive select { background: rgba(0, 0, 0, 0.35); }
+
+/* Sem mexer o mouse por alguns segundos, a interface some quase toda e o
+   ambiente toma a tela; qualquer movimento ou toque traz de volta. */
+body.immersive.idle .room-layout { opacity: 0.14; }
+body.immersive.idle .topbar { opacity: 0.35; }
+
+/* Interface escondida de vez (botão do olho ou tecla H) */
+body.immersive.ui-hidden .room-layout, body.immersive.ui-hidden .topbar { opacity: 0; pointer-events: none; }
+.ui-restore {
+  position: fixed; right: 16px; bottom: 16px; z-index: 5; display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.5rem 0.85rem; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px;
+  background: rgba(14, 13, 12, 0.55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  color: var(--text-2); font: inherit; font-size: 0.82rem; cursor: pointer; opacity: 0.55; transition: opacity 0.3s ease;
+}
+.ui-restore:hover, .ui-restore:focus-visible { opacity: 1; color: var(--text); }
+
+/* Música ambiente: etiqueta compacta */
+.music-chip {
   display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;
   padding: 0.3rem 0.35rem 0.3rem 0.75rem; border: 1px solid var(--line-strong); border-radius: 999px;
   background: var(--surface-2); color: var(--text-2); font-size: 0.82rem;
