@@ -1,7 +1,7 @@
 import { supabase, currentUser, escapeHtml, friendlyError, initials, toast } from './supabase.js';
 import { ICE_SERVERS } from './config.js';
 import { computeRouting, normalizeMasterTarget } from './audioRules.js';
-import { effectiveScene, targetIncludes } from './sceneRules.js';
+import { effectiveScene, parseYouTube, targetIncludes } from './sceneRules.js';
 import { hydrateIcons, icon } from './icons.js';
 
 hydrateIcons();
@@ -36,8 +36,6 @@ const peers = new Map(); // userId -> peer
 const analysers = new Map(); // userId -> AnalyserNode
 const speaking = new Set();
 const mediaUrls = new Map(); // mediaId -> { url, signedAt }
-const ambientAudio = new Audio();
-ambientAudio.loop = true;
 const activeSfx = new Set();
 
 function readStored(key, fallback) {
@@ -75,7 +73,7 @@ const myZoneId = () => (playerById(user.id) || {}).zoneId ?? null;
 // Dados do banco
 // ---------------------------------------------------------------------------
 
-const SCENE_COLS = 'scene_media_id, ambient_media_id, scene_caption, ambient_volume';
+const SCENE_COLS = 'scene_media_id, ambient_youtube, scene_caption, ambient_volume';
 
 async function loadData() {
   const [roomRes, zonesRes, membersRes, mediaRes] = await Promise.all([
@@ -201,7 +199,7 @@ function connectRealtime() {
     channel
       // Atualizações frequentes (alvo do mestre, mover jogador, sussurro) são aplicadas na hora, sem recarregar.
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, ({ new: row }) => {
-        if (db && row) Object.assign(db.room, pick(row, ['master_target', 'scene_media_id', 'ambient_media_id', 'scene_caption', 'ambient_volume', 'name']));
+        if (db && row) Object.assign(db.room, pick(row, ['master_target', 'scene_media_id', 'ambient_youtube', 'scene_caption', 'ambient_volume', 'name']));
         recompute();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, ({ new: row }) => {
@@ -512,11 +510,10 @@ async function stopShare() {
 }
 
 // ---------------------------------------------------------------------------
-// Palco: tela compartilhada ou cena do ambiente (com som ambiente)
+// Palco (tela compartilhada) e ambiente imersivo (fundo da página + música)
 // ---------------------------------------------------------------------------
 
 let stageKey = 'none';
-let ambientKey = null;
 
 function targetName(target) {
   if (!target || target.type === 'all') return 'todos';
@@ -530,7 +527,6 @@ function updateStage() {
   const mediaBox = $('stage-media');
   let key = 'none';
   let label = '';
-  let caption = '';
   let build = null;
 
   const masterPresence = online.get(state.master.userId);
@@ -545,26 +541,14 @@ function updateStage() {
     key = `screen:${masterPeer.videoTrack.id}`;
     label = 'Tela do mestre';
     build = () => videoEl(new MediaStream([masterPeer.videoTrack]), 'screen');
-  } else if (!isMaster) {
+  }
+  if (!isMaster) {
     const zoneRow = db.zones.find((z) => z.id === me.zoneId);
-    const scene = effectiveScene(db.room, zoneRow);
-    if (scene) {
-      caption = scene.caption;
-      const visual = scene.visualId && mediaById(scene.visualId);
-      const url = visual && mediaUrl(visual.id);
-      if (visual && url) {
-        key = `${visual.kind}:${visual.id}`;
-        build = () => (visual.kind === 'video' ? videoEl(url, 'scene') : imgEl(url));
-      } else if (caption) {
-        key = 'text';
-      }
-    }
-    updateAmbient(scene);
+    updateEnvironment(effectiveScene(db.room, zoneRow), zoneRow);
   }
 
   stage.classList.toggle('hidden', key === 'none');
-  stage.classList.toggle('text-only', key === 'text');
-  $('stage-caption').textContent = caption;
+  $('stage-caption').textContent = '';
   $('stage-label').textContent = label;
   $('stage-label').classList.toggle('hidden', !label);
   if (key !== stageKey) {
@@ -590,28 +574,207 @@ function videoEl(src, kind) {
   return v;
 }
 
-function imgEl(src) {
-  const img = document.createElement('img');
-  img.alt = '';
-  img.src = src;
-  return img;
+// ----- Ambiente imersivo -----
+
+let bgKey = null;
+let bgFront = 'a';
+let locationKey = null;
+let titleTimer = null;
+
+function updateEnvironment(scene, zone) {
+  const immersive = Boolean(scene);
+  document.body.classList.toggle('immersive', immersive);
+  $('ui-toggle').classList.toggle('hidden', !immersive);
+  if (!immersive) setUiHidden(false);
+
+  // Texto da cena
+  const text = $('scene-text');
+  const caption = scene ? scene.caption : '';
+  if (text.textContent !== caption) {
+    text.textContent = caption;
+    text.style.animation = 'none';
+    void text.offsetWidth;
+    text.style.animation = '';
+  }
+
+  // Imagem (ou vídeo) do ambiente, com troca suave
+  const visual = scene && scene.visualId ? mediaById(scene.visualId) : null;
+  const url = visual && mediaUrl(visual.id);
+  const key = url ? `${visual.kind}:${visual.id}` : null;
+  if (key !== bgKey) {
+    bgKey = key;
+    setBackground(visual, url, key);
+  }
+
+  // Nome do lugar ao chegar
+  const placeKey = immersive && inCall ? `${zone ? zone.id : 'room'}:${key}` : null;
+  if (placeKey && placeKey !== locationKey) showLocation(zone ? zone.name : db.room.name);
+  locationKey = placeKey;
+
+  updateMusic(scene);
 }
 
-function updateAmbient(scene) {
-  const ambient = inCall && scene && scene.ambientId ? mediaById(scene.ambientId) : null;
-  const url = ambient && mediaUrl(ambient.id);
-  const key = url ? ambient.id : null;
-  ambientAudio.volume = Math.min(1, (scene ? scene.volume : 0.6) * playerSceneVolume);
-  if (key === ambientKey) return;
-  ambientKey = key;
-  if (url) {
-    ambientAudio.src = url;
-    ambientAudio.play().catch(() => {});
+function setBackground(visual, url, key) {
+  const backId = bgFront === 'a' ? 'b' : 'a';
+  const front = $(`scene-layer-${bgFront}`);
+  const back = $(`scene-layer-${backId}`);
+  back.replaceChildren();
+  back.style.backgroundImage = '';
+  const reveal = () => {
+    if (bgKey !== key) return; // já mudou de novo
+    back.classList.add('show');
+    front.classList.remove('show');
+    bgFront = backId;
+    setTimeout(() => {
+      if (!front.classList.contains('show')) {
+        front.replaceChildren();
+        front.style.backgroundImage = '';
+      }
+    }, 2000);
+  };
+  if (!visual || !url) {
+    front.classList.remove('show');
+    return;
+  }
+  if (visual.kind === 'video') {
+    const v = videoEl(url, 'scene');
+    v.addEventListener('loadeddata', reveal, { once: true });
+    back.appendChild(v);
   } else {
-    ambientAudio.pause();
-    ambientAudio.removeAttribute('src');
+    const img = new Image();
+    img.onload = () => {
+      back.style.backgroundImage = `url("${url.replace(/"/g, '%22')}")`;
+      reveal();
+    };
+    img.src = url;
   }
 }
+
+function showLocation(name) {
+  const el = $('location-title');
+  el.textContent = name;
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(titleTimer);
+  titleTimer = setTimeout(() => el.classList.remove('show'), 3800);
+}
+
+function setUiHidden(hidden) {
+  document.body.classList.toggle('ui-hidden', hidden);
+  $('ui-restore').classList.toggle('hidden', !hidden);
+}
+$('ui-toggle').onclick = () => setUiHidden(true);
+$('ui-restore').onclick = () => setUiHidden(false);
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'h' || e.key === 'H') && !e.repeat && !e.target.closest('input, textarea, select') && document.body.classList.contains('immersive')) {
+    setUiHidden(!document.body.classList.contains('ui-hidden'));
+  }
+});
+
+// ----- Música do ambiente (YouTube) -----
+
+let ytApi = null;
+let ytPlayer = null;
+let musicKey = null;
+let musicVolume = 60;
+let musicMuted = readStored('rpg-music-muted', false);
+let musicCheck = null;
+
+function loadYouTubeApi() {
+  if (!ytApi) {
+    ytApi = new Promise((resolve) => {
+      if (window.YT && window.YT.Player) return resolve(window.YT);
+      window.onYouTubeIframeAPIReady = () => resolve(window.YT);
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(script);
+    });
+  }
+  return ytApi;
+}
+
+function applyMusicVolume() {
+  if (!ytPlayer || !ytPlayer.setVolume) return;
+  if (musicMuted) ytPlayer.mute();
+  else {
+    ytPlayer.unMute();
+    ytPlayer.setVolume(musicVolume);
+  }
+  $('music-toggle').innerHTML = icon(musicMuted ? 'volumeOff' : 'volume', 15);
+  $('music-toggle').title = musicMuted ? 'Ativar música' : 'Silenciar música';
+}
+
+function setMusicBlocked(blocked) {
+  if (blocked && !$('music-chip').classList.contains('blocked')) toast('Toque em "Toque para ativar a música" para ouvir o ambiente.', 5000);
+  $('music-chip').classList.toggle('blocked', blocked);
+  $('music-label').textContent = blocked ? 'Toque para ativar a música' : 'Música ambiente';
+}
+
+function destroyMusic() {
+  clearTimeout(musicCheck);
+  if (ytPlayer && ytPlayer.destroy) ytPlayer.destroy();
+  ytPlayer = null;
+  $('yt-holder').innerHTML = '<div id="yt-player"></div>';
+}
+
+async function updateMusic(scene) {
+  const parsed = inCall && scene && scene.youtube ? parseYouTube(scene.youtube) : null;
+  const key = parsed ? `${parsed.videoId}|${parsed.listId}` : null;
+  musicVolume = Math.round(Math.min(1, (scene ? scene.volume : 0.6) * playerSceneVolume) * 100);
+  $('music-chip').classList.toggle('hidden', !key);
+  applyMusicVolume();
+  if (key === musicKey) return;
+  musicKey = key;
+  destroyMusic();
+  if (!key) return;
+
+  const YT = await loadYouTubeApi();
+  if (musicKey !== key) return;
+  const playerVars = { autoplay: 1, controls: 0, disablekb: 1, playsinline: 1, rel: 0, fs: 0, iv_load_policy: 3, loop: 1 };
+  if (parsed.listId) Object.assign(playerVars, { listType: 'playlist', list: parsed.listId });
+  else playerVars.playlist = parsed.videoId; // necessário para repetir um vídeo só
+  ytPlayer = new YT.Player('yt-player', {
+    width: 200,
+    height: 113,
+    videoId: parsed.videoId || undefined,
+    playerVars,
+    events: {
+      onReady: (e) => {
+        applyMusicVolume();
+        e.target.playVideo();
+        clearTimeout(musicCheck);
+        musicCheck = setTimeout(() => {
+          const st = ytPlayer && ytPlayer.getPlayerState ? ytPlayer.getPlayerState() : -1;
+          if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING) setMusicBlocked(true);
+        }, 4000);
+      },
+      onStateChange: (e) => {
+        if (e.data === YT.PlayerState.PLAYING) setMusicBlocked(false);
+        if (e.data === YT.PlayerState.ENDED && !parsed.listId) {
+          e.target.seekTo(0);
+          e.target.playVideo();
+        }
+      },
+      onError: (e) => {
+        // 101/150: o dono do vídeo não permite tocar fora do YouTube
+        $('music-label').textContent = e && (e.data === 101 || e.data === 150) ? 'Este vídeo não permite tocar aqui' : 'Música indisponível';
+      },
+    },
+  });
+}
+
+$('music-toggle').onclick = (e) => {
+  e.stopPropagation();
+  musicMuted = !musicMuted;
+  store('rpg-music-muted', musicMuted);
+  applyMusicVolume();
+};
+$('music-chip').onclick = () => {
+  if (!$('music-chip').classList.contains('blocked') || !ytPlayer) return;
+  applyMusicVolume();
+  ytPlayer.playVideo();
+};
 
 $('stage-full').onclick = () => {
   const stage = $('stage');
@@ -731,8 +894,8 @@ function stopCall() {
   screenTrack = null;
   closeAllPeers();
   stopAllSfx();
-  ambientAudio.pause();
-  ambientKey = null;
+  musicKey = null;
+  destroyMusic();
   if (localStream) localStream.getTracks().forEach((t) => t.stop());
   if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
   analysers.clear();
@@ -925,10 +1088,13 @@ function setupMasterControls() {
     renderSceneEditor();
   };
   $('scene-caption').oninput = (e) => (sceneDraft.caption = e.target.value);
-  $('scene-ambient').onchange = (e) => (sceneDraft.ambientId = e.target.value ? Number(e.target.value) : null);
+  $('scene-youtube').oninput = (e) => {
+    sceneDraft.youtube = e.target.value.trim();
+    renderYoutubeHint();
+  };
   $('scene-volume').oninput = (e) => (sceneDraft.volume = Number(e.target.value));
   $('scene-apply').onclick = () => applyScene(sceneDraft);
-  $('scene-clear').onclick = () => applyScene({ visualId: null, ambientId: null, caption: '', volume: 0.6 }, true);
+  $('scene-clear').onclick = () => applyScene({ visualId: null, youtube: '', caption: '', volume: 0.6 }, true);
 
   $('media-input').onchange = (e) => {
     uploadFiles([...e.target.files]);
@@ -969,11 +1135,13 @@ function loadSceneDraft() {
   const src = sceneSource(sceneDest) || {};
   sceneDraft = {
     visualId: src.scene_media_id ?? null,
-    ambientId: src.ambient_media_id ?? null,
+    youtube: src.ambient_youtube || '',
     caption: src.scene_caption || '',
     volume: typeof src.ambient_volume === 'number' ? src.ambient_volume : 0.6,
   };
   $('scene-caption').value = sceneDraft.caption;
+  $('scene-youtube').value = sceneDraft.youtube;
+  renderYoutubeHint();
   $('scene-volume').value = sceneDraft.volume;
 }
 
@@ -985,11 +1153,20 @@ function openSceneEditor(zoneId) {
   $('master-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function renderYoutubeHint() {
+  const value = $('scene-youtube').value.trim();
+  const hint = $('scene-youtube-hint');
+  if (!value) hint.textContent = 'Toca em loop para quem estiver no ambiente. Aceita vídeo ou playlist.';
+  else if (parseYouTube(value)) hint.innerHTML = `Link reconhecido. <a href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer">Abrir no YouTube</a>`;
+  else hint.textContent = 'Esse link não parece ser do YouTube.';
+}
+
 async function applyScene(draft, clear = false) {
-  const ok = await rpc('set_scene', {
+  if (draft.youtube && !parseYouTube(draft.youtube)) return toast('Cole um link válido do YouTube.');
+  const ok = await rpc('set_environment', {
     p_zone_id: sceneDest === 'room' ? null : sceneDest,
     p_scene_media_id: draft.visualId,
-    p_ambient_media_id: draft.ambientId,
+    p_ambient_youtube: draft.youtube || null,
     p_caption: draft.caption,
     p_ambient_volume: draft.volume,
   });
@@ -1033,7 +1210,7 @@ async function uploadFiles(files) {
     }
     done += 1;
   }
-  status.textContent = done ? `${done} ${done === 1 ? 'arquivo enviado' : 'arquivos enviados'}.` : 'Imagens, vídeos e áudios de até 50 MB.';
+  status.textContent = done ? `${done} ${done === 1 ? 'arquivo enviado' : 'arquivos enviados'}.` : 'Imagens dos ambientes e áudios de efeitos, até 50 MB.';
   scheduleRefresh();
 }
 
@@ -1101,10 +1278,9 @@ function sceneSummary(zone) {
   const scene = effectiveScene(db.room, zone);
   if (!scene) return '<span class="muted">Sem cena</span>';
   const visual = scene.visualId && mediaById(scene.visualId);
-  const ambient = scene.ambientId && mediaById(scene.ambientId);
   const parts = [];
   if (visual) parts.push(`<span>${icon(visual.kind === 'video' ? 'film' : 'image', 13)}${escapeHtml(visual.name)}</span>`);
-  if (ambient) parts.push(`<span>${icon('music', 13)}${escapeHtml(ambient.name)}</span>`);
+  if (scene.youtube) parts.push(`<span>${icon('music', 13)}Música do YouTube</span>`);
   if (!visual && scene.caption) parts.push(`<span>“${escapeHtml(scene.caption.slice(0, 40))}”</span>`);
   if (scene.from === 'room') parts.push('<span class="muted">(cena padrão)</span>');
   return parts.join('');
@@ -1271,12 +1447,6 @@ function renderSceneEditor() {
       const inner = !url ? escapeHtml(m.name) : m.kind === 'video' ? `<video src="${escapeHtml(url)}#t=0.5" muted preload="metadata"></video>` : `<img src="${escapeHtml(url)}" alt="" loading="lazy">`;
       return `<button class="thumb ${sceneDraft.visualId === m.id ? 'selected' : ''}" data-visual="${m.id}" title="${escapeHtml(m.name)}">${inner}${m.kind === 'video' ? `<span class="kind">${icon('film', 12)}</span>` : ''}</button>`;
     }),
-  ].join('');
-
-  const audios = db.media.filter((m) => m.kind === 'audio');
-  $('scene-ambient').innerHTML = [
-    `<option value="">Nenhum</option>`,
-    ...audios.map((m) => `<option value="${m.id}" ${sceneDraft.ambientId === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`),
   ].join('');
 
   $('media-list').innerHTML = db.media.length

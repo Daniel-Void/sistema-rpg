@@ -11,6 +11,16 @@
   <title>Sala — Sistema RPG</title>
 </head>
 <body>
+  <!-- Ambiente imersivo do jogador: ocupa a tela inteira, atrás da interface -->
+  <div id="scene-bg" aria-hidden="true">
+    <div class="layer" id="scene-layer-a"></div>
+    <div class="layer" id="scene-layer-b"></div>
+    <div class="vignette"></div>
+    <div class="grain"></div>
+  </div>
+  <div id="location-title" class="location-title" aria-live="polite"></div>
+  <div id="yt-holder" aria-hidden="true"><div id="yt-player"></div></div>
+
   <header class="topbar">
     <div class="left">
       <a href="/painel" class="btn sm quiet icon-only" title="Voltar ao painel"><i data-icon="back"></i></a>
@@ -26,12 +36,14 @@
         <button id="share-btn" class="sm"><i data-icon="screen" data-size="16"></i><span>Compartilhar tela</span></button>
       </span>
       <button id="mute-btn" class="sm" disabled></button>
+      <button id="ui-toggle" class="sm quiet icon-only hidden" title="Esconder interface (H)"><i data-icon="eye" data-size="16"></i></button>
       <button id="leave-btn" class="sm danger">Sair da call</button>
     </div>
   </header>
 
   <main class="room-layout">
     <section class="room-main">
+      <p id="scene-text" class="scene-text"></p>
       <div id="stage" class="stage hidden">
         <div id="stage-media" style="height:100%"></div>
         <div class="caption" id="stage-caption"></div>
@@ -73,12 +85,13 @@
         <div data-panel="cena" hidden>
           <label for="scene-dest" style="margin-top:0">Mostrar para</label>
           <select id="scene-dest"></select>
-          <label>Imagem ou vídeo</label>
+          <label>Imagem do ambiente</label>
           <div id="scene-visuals" class="thumbs"></div>
           <label for="scene-caption">Texto na tela</label>
           <input id="scene-caption" maxlength="200" placeholder="Uma névoa fria cobre as árvores">
-          <label for="scene-ambient">Som ambiente (em loop)</label>
-          <select id="scene-ambient"></select>
+          <label for="scene-youtube">Música do ambiente (link do YouTube)</label>
+          <input id="scene-youtube" type="url" inputmode="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          <p class="hint" id="scene-youtube-hint" style="margin-top:0.35rem">Toca em loop para quem estiver no ambiente. Aceita vídeo ou playlist.</p>
           <div class="inline" style="align-items:center;margin-top:0.6rem">
             <span class="hint">Volume</span>
             <input type="range" id="scene-volume" min="0" max="1" step="0.05" value="0.6">
@@ -93,7 +106,7 @@
             <label class="btn sm" for="media-input" style="margin:0"><i data-icon="upload" data-size="15"></i>Enviar arquivos</label>
             <input type="file" id="media-input" multiple accept="image/*,video/*,audio/*" hidden>
           </div>
-          <p class="hint" id="upload-status">Imagens, vídeos e áudios de até 50 MB.</p>
+          <p class="hint" id="upload-status">Imagens dos ambientes e áudios de efeitos, até 50 MB.</p>
           <div id="media-list" class="media-list"></div>
         </div>
 
@@ -114,11 +127,19 @@
         <p class="eyebrow">Você está ouvindo</p>
         <div id="hearing" class="small">—</div>
         <hr class="divider">
-        <p class="eyebrow">Volume da cena e dos efeitos</p>
+        <p class="eyebrow">Volume da música e dos efeitos</p>
         <input type="range" id="player-scene-volume" min="0" max="1" step="0.05" value="1">
+        <div id="music-chip" class="music-chip hidden">
+          <i data-icon="music" data-size="15"></i>
+          <span id="music-label">Música ambiente</span>
+          <button id="music-toggle" class="sm quiet icon-only" title="Silenciar música"><i data-icon="volume" data-size="15"></i></button>
+        </div>
+
       </div>
     </aside>
   </main>
+
+  <button id="ui-restore" class="ui-restore hidden" title="Mostrar interface (H)"><i data-icon="eye" data-size="16"></i><span>Mostrar interface</span></button>
 
   <div id="join-overlay" class="overlay">
     <div class="panel">

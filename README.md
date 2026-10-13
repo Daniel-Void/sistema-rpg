@@ -27,17 +27,21 @@ Exemplo: o jogador 1 vai para a floresta. O mestre cria o ambiente *Floresta*, a
 
 O mestre clica em **Compartilhar tela** na barra superior e escolhe para quem: **Todos** ou um **ambiente** específico. A tela aparece no palco dos jogadores escolhidos. Quem não está no alvo não recebe nenhum quadro de vídeo. Dá para trocar o alvo durante o compartilhamento.
 
-## Funcionalidade 3: cenas, som ambiente e efeitos
+## Funcionalidade 3: ambientes imersivos, música e efeitos
 
-Na aba **Cena**, o mestre:
+**Para o jogador, a tela inteira vira o ambiente em que ele está.** A imagem do ambiente ocupa o fundo da página, com um movimento lento de câmera, bordas escurecidas e uma leve textura de cinema. A interface (pessoas, ambientes, controles) flutua por cima em painéis translúcidos, deixando o centro da cena livre. Ao chegar num ambiente, o nome do lugar aparece em destaque e some; o texto da cena fica flutuando sobre a imagem. Quando o mestre move o jogador, a cena troca com um esmaecimento suave. A tecla `H` (ou o ícone de olho) esconde a interface inteira para ver só o ambiente.
 
-1. Envia imagens, vídeos e áudios para a **biblioteca** da sala (até 50 MB por arquivo).
-2. Escolhe **para quem** mostrar: um ambiente (ex.: *Floresta*) ou a **cena padrão**, que aparece para quem está em ambiente sem cena própria.
-3. Define a **imagem ou vídeo**, um **texto na tela** e um **som ambiente** em loop, com volume.
+Na aba **Cena**, o mestre escolhe o ambiente (ou a **cena padrão**, para quem estiver em ambiente sem cena própria) e define:
 
-Cada jogador vê a cena do ambiente em que está, e ela muda sozinha quando o mestre move o jogador. O ícone de imagem no card do ambiente abre a cena dele direto.
+- **Imagem do ambiente:** enviada por ele para a biblioteca da sala (até 50 MB; vídeo em loop também funciona).
+- **Música do ambiente:** um **link do YouTube** (vídeo ou playlist), que toca em loop, só o áudio, para quem estiver naquele ambiente. O campo avisa se o link não for do YouTube.
+- **Texto na tela** e **volume** da música.
 
-Na aba **Sons**, o mestre dispara **efeitos sonoros** para todos, para um ambiente ou para um jogador. **Parar efeitos** corta tudo. Cada jogador tem seu controle de volume da cena e dos efeitos.
+O ícone de imagem no card do ambiente abre a cena dele direto. Cada jogador tem um controle de volume e um botão para silenciar a música. Se o navegador bloquear o som automático, aparece "Toque para ativar a música".
+
+Na aba **Sons**, o mestre dispara **efeitos sonoros** (áudios enviados para a biblioteca) para todos, para um ambiente ou para um jogador. **Parar efeitos** corta tudo.
+
+> A música é tocada pelo player do YouTube em cada navegador (não fica sincronizada entre os jogadores). Vídeos cujo dono proíbe a reprodução fora do YouTube mostram "Este vídeo não permite tocar aqui"; nesse caso, escolha outro link.
 
 ## Acesso de teste (usuários temporários)
 
@@ -97,7 +101,7 @@ Por padrão o site local usa o mesmo projeto Supabase de produção (`public/js/
 
 As migrações ficam em `supabase/migrations/`. Para recriar em outro projeto: `supabase link` + `supabase db push` (a migração `06` precisa do Realtime já inicializado: abra o site uma vez antes, ou rode-a depois).
 
-Tabelas: `profiles` (nome e papel, criado no cadastro), `rooms`, `room_invites` (só o mestre lê), `zones`, `room_members`, `signals`, `room_media` (biblioteca). As colunas `scene_*`/`ambient_*` em `zones` e `rooms` guardam as cenas.
+Tabelas: `profiles` (nome e papel, criado no cadastro), `rooms`, `room_invites` (só o mestre lê), `zones`, `room_members`, `signals`, `room_media` (biblioteca). As colunas `scene_media_id`, `scene_caption`, `ambient_youtube` e `ambient_volume` em `zones` e `rooms` guardam as cenas (gravadas pela função `set_environment`).
 
 ## Limites atuais e próximos passos
 

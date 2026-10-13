@@ -63,7 +63,11 @@ roomsEl.addEventListener('click', async (e) => {
       toast('Código copiado!');
     } else if (btn.dataset.delete) {
       if (!confirm('Excluir esta sala? Isso não pode ser desfeito.')) return;
-      const { error } = await supabase.from('rooms').delete().eq('id', Number(btn.dataset.delete));
+      const roomId = Number(btn.dataset.delete);
+      // Apaga também os arquivos da biblioteca da sala
+      const { data: media } = await supabase.from('room_media').select('storage_path').eq('room_id', roomId);
+      if (media && media.length) await supabase.storage.from('midia').remove(media.map((m) => m.storage_path));
+      const { error } = await supabase.from('rooms').delete().eq('id', roomId);
       if (error) throw error;
       await loadRooms();
     } else if (btn.dataset.leave) {
