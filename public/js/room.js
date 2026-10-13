@@ -86,11 +86,12 @@ async function loadData() {
   const [roomRes, zonesRes, membersRes, mediaRes, tracksRes] = await Promise.all([
     supabase
       .from('rooms')
-      .select(`id, name, description, master_id, master_target, expires_at, ${SCENE_COLS}, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)`)
+      // '*' para funcionar antes e depois da migração 17 (expires_at)
+      .select('*, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)')
       .eq('id', roomId)
       .maybeSingle(),
     supabase.from('zones').select(`id, name, position, ${SCENE_COLS}`).eq('room_id', roomId).eq('archived', false).order('position').order('id'),
-    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, whisper_requested, muted_by_master, profile:profiles(display_name)').eq('room_id', roomId),
+    supabase.from('room_members').select('*, profile:profiles(display_name)').eq('room_id', roomId),
     supabase.from('room_media').select('id, kind, name, storage_path, created_at').eq('room_id', roomId).order('created_at'),
     supabase.from('music_tracks').select(TRACK_COLS).eq('room_id', roomId).eq('archived', false).order('position'),
   ]);
@@ -2051,7 +2052,7 @@ async function uploadFiles(files) {
     }
     done += 1;
   }
-  status.textContent = done ? `${done} ${done === 1 ? 'arquivo enviado' : 'arquivos enviados'}.` : 'Imagens dos ambientes e áudios de efeitos, até 50 MB.';
+  status.textContent = done ? `${done} ${done === 1 ? 'arquivo enviado' : 'arquivos enviados'}.` : 'Imagens (ou vídeos) dos ambientes, até 50 MB.';
   scheduleRefresh();
 }
 
@@ -2098,9 +2099,10 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
       : '';
   const name = escapeHtml(displayName);
   // Mestre: silenciar e remover jogadores
+  const canMute = db.members.some((m) => 'muted_by_master' in m); // existe depois da migração 17
   const masterBtns =
     isMaster && !master
-      ? `<button class="sm icon-only ${mutedByMaster ? 'whisper-active' : ''}" data-action="mute" data-user="${escapeHtml(userId)}" data-muted="${mutedByMaster ? 1 : 0}" title="${mutedByMaster ? `Deixar ${name} falar de novo` : `Silenciar ${name} para todos`}">${icon(mutedByMaster ? 'micOff' : 'mic', 15)}</button>
+      ? `${canMute ? `<button class="sm icon-only ${mutedByMaster ? 'whisper-active' : ''}" data-action="mute" data-user="${escapeHtml(userId)}" data-muted="${mutedByMaster ? 1 : 0}" title="${mutedByMaster ? `Deixar ${name} falar de novo` : `Silenciar ${name} para todos`}">${icon(mutedByMaster ? 'micOff' : 'mic', 15)}</button>` : ''}
          <button class="sm icon-only danger" data-action="kick" data-user="${escapeHtml(userId)}" title="Remover ${name} da sala">${icon('logout', 15)}</button>`
       : '';
   // Qualquer um: volume de cada pessoa só para si
@@ -2149,7 +2151,8 @@ function render() {
 
   $('master-row').innerHTML = personHtml({ ...state.master, master: true });
 
-  $('zones').innerHTML = state.zones
+  // Jogador só vê o ambiente em que está; o mestre vê todos
+  $('zones').innerHTML = (isMaster ? state.zones : state.zones.filter((z) => z.id === myZone))
     .map((zone) => {
       const members = state.players.filter((p) => p.zoneId === zone.id);
       const vol = typeof zoneVolumes[zone.id] === 'number' ? zoneVolumes[zone.id] : 1;

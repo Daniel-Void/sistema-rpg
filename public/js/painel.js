@@ -38,12 +38,12 @@ async function cleanupOrphanFiles() {
 }
 
 async function loadRooms() {
-  const { data: rooms, error } = await supabase
+  let { data: rooms, error } = await supabase
     .from('rooms')
-    .select('id, name, description, master_id, created_at, expires_at, master:profiles!rooms_master_id_fkey(display_name), room_members(count), room_invites(code)')
-    .gt('expires_at', new Date().toISOString())
+    .select('*, master:profiles!rooms_master_id_fkey(display_name), room_members(count), room_invites(code)')
     .order('created_at', { ascending: false });
   if (error) throw error;
+  rooms = rooms.filter((r) => !r.expires_at || Date.parse(r.expires_at) > Date.now());
   if (!rooms.length) {
     roomsEl.innerHTML = `<div class="empty">${
       user.role === 'mestre' ? 'Nenhuma sala ainda. Crie a primeira acima!' : 'Você ainda não está em nenhuma sala. Use o código de convite do seu mestre.'
@@ -62,7 +62,7 @@ async function loadRooms() {
         <div class="meta">
           ${isMaster ? '<span class="tag accent">Você é o mestre</span>' : `<span class="tag">Mestre: ${escapeHtml(r.master && r.master.display_name)}</span>`}
           <span class="tag">${icon('users', 13)}${players} ${players === 1 ? 'jogador' : 'jogadores'}</span>
-          <span class="tag" title="Toda sala é excluída 8 horas depois de criada">${expiresText(r.expires_at)}</span>
+          ${r.expires_at ? `<span class="tag" title="Toda sala é excluída 8 horas depois de criada">${expiresText(r.expires_at)}</span>` : ''}
         </div>
         ${isMaster && code ? `<div class="invite">Convite <span class="code">${escapeHtml(code)}</span> <button class="sm quiet icon-only" data-copy="${escapeHtml(code)}" title="Copiar código">${icon('copy', 15)}</button></div>` : ''}
         <div class="actions">

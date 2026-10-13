@@ -33,7 +33,7 @@
     <div class="right">
       <span id="conn-status" class="tag bad"><span class="dot"></span><span>Desconectado</span></span>
       <span id="share-controls" class="inline hidden">
-        <select id="share-target" title="Compartilhar com" style="width:auto"></select>
+        <select id="share-target" title="Compartilhar com" style="width:auto" hidden></select>
         <button id="share-btn" class="sm"><i data-icon="screen" data-size="16"></i><span>Compartilhar tela</span></button>
       </span>
       <button id="mute-btn" class="sm" disabled></button>
@@ -69,7 +69,7 @@
           <button role="tab" data-tab="voz" aria-selected="true">Voz</button>
           <button role="tab" data-tab="cena" aria-selected="false">Cena</button>
           <button role="tab" data-tab="musica" aria-selected="false">Música</button>
-          <button role="tab" data-tab="sons" aria-selected="false">Sons</button>
+          <button role="tab" data-tab="sons" aria-selected="false" hidden>Sons</button>
           <button role="tab" data-tab="dados" aria-selected="false">Dados <span id="dice-badge" class="badge-count hidden"></span></button>
         </div>
 
@@ -104,9 +104,9 @@
           <div class="upload-row">
             <p class="eyebrow" style="margin:0;flex:1">Biblioteca</p>
             <label class="btn sm" for="media-input" style="margin:0"><i data-icon="upload" data-size="15"></i>Enviar arquivos</label>
-            <input type="file" id="media-input" multiple accept="image/*,video/*,audio/*" hidden>
+            <input type="file" id="media-input" multiple accept="image/*,video/*" hidden>
           </div>
-          <p class="hint" id="upload-status">Imagens dos ambientes e áudios de efeitos, até 50 MB.</p>
+          <p class="hint" id="upload-status">Imagens (ou vídeos) dos ambientes, até 50 MB.</p>
           <div id="media-list" class="media-list"></div>
         </div>
 
@@ -164,7 +164,7 @@
         <p class="eyebrow">Você está ouvindo</p>
         <div id="hearing" class="small">—</div>
         <hr class="divider">
-        <p class="eyebrow">Volume da música e dos efeitos</p>
+        <p class="eyebrow">Volume da música</p>
         <input type="range" id="player-scene-volume" min="0" max="1" step="0.05" value="1">
         <div id="music-chip" class="music-chip hidden">
           <i data-icon="music" data-size="15"></i>

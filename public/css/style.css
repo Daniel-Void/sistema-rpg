@@ -46,7 +46,7 @@ a { color: var(--text); text-underline-offset: 3px; }
 .icon { display: block; flex: none; }
 .muted { color: var(--muted); }
 .small { font-size: 0.85rem; }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }
 .eyebrow { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); font-weight: 500; }
 .mono { font-family: var(--font-mono); }
 
