@@ -29,7 +29,6 @@ let inCall = false;
 let localStream = null;
 let micTrack = null;
 let screenTrack = null;
-let screenAudioTrack = null; // áudio da aba/tela compartilhada (opcional)
 let shareTarget = { type: 'all' };
 let audioCtx = null;
 let muted = false;
@@ -194,21 +193,9 @@ function handleRemoved(reason) {
 // Realtime: presença + mudanças no banco + sinalização + efeitos sonoros
 // ---------------------------------------------------------------------------
 
-/**
- * Conecta ao canal da sala. Se a rede cair, o cliente do Supabase reconecta sozinho
- * e avisa de novo com SUBSCRIBED; aí refazemos a presença e recarregamos o estado.
- * O canal nunca é recriado (o cliente reaproveita canais pelo nome).
- */
-function connectRealtime(firstTimeout = 25000) {
+function connectRealtime() {
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const ch = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: sessionId } } });
-    channel = ch;
-    const failTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error('timeout'));
-    }, firstTimeout);
+    channel = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: sessionId } } });
     const onChange = () => scheduleRefresh();
     channel
       // Atualizações frequentes (alvo do mestre, mover jogador, sussurro) são aplicadas na hora, sem recarregar.
@@ -240,32 +227,20 @@ function connectRealtime(firstTimeout = 25000) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dice_rolls', filter: `room_id=eq.${roomId}` }, () => scheduleRolls())
       .on('presence', { event: 'sync' }, onPresenceSync)
       .subscribe(async (status, err) => {
-        if (ch !== channel) return;
         if (status === 'SUBSCRIBED') {
           await trackPresence();
-          scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto estava desconectado
+          scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto conectava
           scheduleRolls();
-          if (!settled) {
-            settled = true;
-            clearTimeout(failTimer);
-            resolve();
-          }
-        } else {
-          if (err) console.warn('realtime', status, err.message);
+          resolve();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          updateConnStatus(false);
+          reject(err || new Error(status));
+        } else if (status === 'CLOSED') {
           updateConnStatus(false);
         }
       });
   });
 }
-
-// Conferência periódica: se algum aviso em tempo real se perder, o estado se corrige sozinho.
-let safetyTicks = 0;
-setInterval(() => {
-  if (!inCall) return;
-  safetyTicks += 1;
-  scheduleRolls();
-  if (safetyTicks % 6 === 0) scheduleRefresh();
-}, 5000);
 
 function pick(obj, keys) {
   const out = {};
@@ -346,11 +321,9 @@ function createPeer(peerId, peerSession, initiator) {
     polite: !initiator,
     makingOffer: false,
     ignoreOffer: false,
-    audioTx: null, // voz (microfone)
-    videoTx: null, // tela compartilhada
-    screenAudioTx: null, // áudio da tela compartilhada
+    audioTx: null,
+    videoTx: null,
     videoTrack: null,
-    screenAudio: null,
     seq: 0,
     lastSeq: 0,
     queue: Promise.resolve(),
@@ -358,23 +331,11 @@ function createPeer(peerId, peerSession, initiator) {
   peers.set(peerId, peer);
 
   if (initiator) {
-    // A ordem importa: 0 = voz, 1 = vídeo da tela, 2 = áudio da tela
     peer.audioTx = pc.addTransceiver('audio', { direction: 'sendrecv' });
     peer.videoTx = pc.addTransceiver('video', { direction: 'sendrecv' });
-    peer.screenAudioTx = pc.addTransceiver('audio', { direction: 'sendrecv' });
   }
 
   pc.ontrack = ({ track, transceiver }) => {
-    const index = pc.getTransceivers().indexOf(transceiver);
-    if (track.kind === 'audio' && index === 2) {
-      peer.screenAudioTx = peer.screenAudioTx || transceiver;
-      peer.screenAudio = peer.screenAudio || new Audio();
-      peer.screenAudio.autoplay = true;
-      peer.screenAudio.srcObject = new MediaStream([track]);
-      peer.screenAudio.volume = Math.min(1, playerSceneVolume);
-      peer.screenAudio.play().catch(() => {});
-      return;
-    }
     if (track.kind === 'video') {
       peer.videoTx = peer.videoTx || transceiver;
       peer.videoTrack = track;
@@ -415,7 +376,6 @@ function closePeer(peerId) {
   if (!peer) return;
   peer.pc.close();
   peer.audio.srcObject = null;
-  if (peer.screenAudio) peer.screenAudio.srcObject = null;
   peers.delete(peerId);
   analysers.delete(peerId);
   speaking.delete(peerId);
@@ -468,11 +428,12 @@ async function handleDescription(peer, description) {
   if (peer.ignoreOffer) return;
   await pc.setRemoteDescription(description);
   if (description.type === 'offer') {
-    const ts = pc.getTransceivers();
-    peer.audioTx = peer.audioTx || ts[0] || null;
-    peer.videoTx = peer.videoTx || ts[1] || null;
-    peer.screenAudioTx = peer.screenAudioTx || ts[2] || null;
-    for (const t of ts) t.direction = 'sendrecv';
+    for (const t of pc.getTransceivers()) {
+      const kind = t.receiver.track.kind;
+      if (kind === 'audio' && !peer.audioTx) peer.audioTx = t;
+      if (kind === 'video' && !peer.videoTx) peer.videoTx = t;
+      t.direction = 'sendrecv';
+    }
     await applyPeerRouting(peer);
     await pc.setLocalDescription();
     await sendDescription(peer);
@@ -502,29 +463,9 @@ async function applyPeerRouting(peer) {
     }
   };
   await replace(peer.audioTx && peer.audioTx.sender, r.sendTo.includes(peer.id) ? micTrack : null);
-  const sharing = isMaster && screenTrack && shareIncludes(peer.id);
-  await replace(peer.videoTx && peer.videoTx.sender, sharing ? screenTrack : null);
-  if (sharing) tuneScreenSender(peer);
-  await replace(peer.screenAudioTx && peer.screenAudioTx.sender, sharing && screenAudioTrack ? screenAudioTrack : null);
-  if (peer.screenAudio) peer.screenAudio.volume = Math.min(1, playerSceneVolume);
+  await replace(peer.videoTx && peer.videoTx.sender, isMaster && screenTrack && shareIncludes(peer.id) ? screenTrack : null);
   peer.audio.muted = !r.hearFrom.includes(peer.id);
   peer.audio.volume = volumeFor(peer.id);
-}
-
-/** Pede ao navegador para manter a resolução da tela (mapas e textos legíveis). */
-function tuneScreenSender(peer) {
-  const sender = peer.videoTx && peer.videoTx.sender;
-  if (!sender || peer.screenTunedFor === screenTrack) return;
-  peer.screenTunedFor = screenTrack;
-  try {
-    const params = sender.getParameters();
-    if (!params.encodings || !params.encodings.length) return; // ainda não negociado
-    params.encodings[0].maxBitrate = 3_000_000;
-    params.encodings[0].maxFramerate = 24;
-    sender.setParameters(params).catch((err) => console.warn('screen params', err));
-  } catch (err) {
-    console.warn('screen params', err);
-  }
 }
 
 function volumeFor(userId) {
@@ -543,33 +484,16 @@ function applyAllRouting() {
 // Compartilhamento de tela (mestre)
 // ---------------------------------------------------------------------------
 
-const canShareScreen = Boolean(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-
 async function startShare() {
-  if (!canShareScreen) {
-    toast('Este navegador não permite compartilhar a tela (celulares não suportam). Use Chrome, Edge ou Firefox no computador.', 7000);
-    return;
-  }
-  if (!inCall) return toast('Entre na call para compartilhar a tela.');
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 24, max: 30 } },
-      audio: true, // no Chrome/Edge, marque "Compartilhar áudio da aba" para enviar o som
-      selfBrowserSurface: 'exclude', // não oferece a própria aba do site (evita o efeito espelho)
-      surfaceSwitching: 'include',
-      systemAudio: 'include',
-    });
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
     screenTrack = stream.getVideoTracks()[0];
-    screenAudioTrack = stream.getAudioTracks()[0] || null;
     screenTrack.contentHint = 'detail';
     screenTrack.onended = stopShare;
   } catch (err) {
-    if (err && err.name === 'NotAllowedError') return; // cancelou a escolha
-    console.error('share', err);
-    toast('Não foi possível compartilhar a tela. Verifique a permissão do navegador.', 6000);
+    if (err && err.name !== 'NotAllowedError') toast('Não foi possível compartilhar a tela.');
     return;
   }
-  if (!screenAudioTrack) toast('Tela compartilhada sem som. Para enviar o som, compartilhe uma aba e marque "Compartilhar áudio".', 7000);
   await trackPresence();
   applyAllRouting();
   renderShareControls();
@@ -581,9 +505,7 @@ async function stopShare() {
     screenTrack.onended = null;
     screenTrack.stop();
   }
-  if (screenAudioTrack) screenAudioTrack.stop();
   screenTrack = null;
-  screenAudioTrack = null;
   await trackPresence();
   applyAllRouting();
   renderShareControls();
@@ -616,7 +538,7 @@ function updateStage() {
 
   if (isMaster && screenTrack) {
     key = `preview:${screenTrack.id}`;
-    label = `Você está compartilhando a tela${screenAudioTrack ? ' com som' : ''} com ${targetName(shareTarget)}`;
+    label = `Você está compartilhando a tela com ${targetName(shareTarget)}`;
     build = () => videoEl(new MediaStream([screenTrack]), 'screen');
   } else if (!isMaster && inCall && masterPresence && masterPresence.sharing && masterPeer && masterPeer.videoTrack && !masterPeer.videoTrack.muted && targetIncludes(masterPresence.shareTarget, me)) {
     key = `screen:${masterPeer.videoTrack.id}`;
@@ -1076,47 +998,8 @@ function queueReveal(r) {
   if (!revealing) nextReveal();
 }
 
-// ----- Dados rolando na tela -----
-
-/** Forma (SVG) de cada tipo de dado. Dados com outros lados viram uma esfera. */
-const DIE_SHAPES = {
-  4: { poly: '50,6 95,90 5,90', text: 66 },
-  6: { rect: true, text: 58 },
-  8: { poly: '50,3 96,50 50,97 4,50', text: 58 },
-  10: { poly: '50,3 95,42 50,97 5,42', text: 54 },
-  12: { poly: '50,4 95,37 78,94 22,94 5,37', text: 60 },
-  20: { poly: '50,3 94,27 94,73 50,97 6,73 6,27', inner: '50,20 78,68 22,68', text: 58 },
-  100: { poly: '50,3 95,42 50,97 5,42', text: 54 },
-};
-
-function dieSvg(faces, value) {
-  const shape = DIE_SHAPES[faces];
-  const body = !shape
-    ? '<circle cx="50" cy="50" r="45" class="die-body"/>'
-    : shape.rect
-      ? '<rect x="7" y="7" width="86" height="86" rx="16" class="die-body"/>'
-      : `<polygon points="${shape.poly}" class="die-body"/>${shape.inner ? `<polygon points="${shape.inner}" class="die-edge"/>` : ''}`;
-  const size = String(value).length >= 4 ? 22 : String(value).length === 3 ? 28 : 36;
-  return `<svg viewBox="0 0 100 100" aria-hidden="true">${body}<text x="50" y="${shape ? shape.text : 58}" text-anchor="middle" dominant-baseline="middle" font-size="${size}" class="die-num">${value}</text></svg>
-    <span class="die-type">d${faces}</span>`;
-}
-
-/** Dados que vão aparecer rolando (no máximo 14; o resto entra no total). */
-function diceToShow(result) {
-  const out = [];
-  let hidden = 0;
-  for (const t of (result && result.terms) || []) {
-    if (t.type !== 'dice') continue;
-    t.rolls.forEach((v, j) => {
-      if (out.length < 14) out.push({ faces: t.faces, value: v, kept: t.kept[j], negative: t.sign < 0 });
-      else hidden += 1;
-    });
-  }
-  return { dice: out, hidden };
-}
-
 function nextReveal() {
-  revealTimers.forEach((t) => { clearTimeout(t); clearInterval(t); });
+  revealTimers.forEach(clearTimeout);
   revealTimers = [];
   const el = $('dice-reveal');
   const r = revealQueue.shift();
@@ -1127,140 +1010,60 @@ function nextReveal() {
     return;
   }
   revealing = true;
-  const { dice, hidden } = diceToShow(r.result);
-  const consts = ((r.result && r.result.terms) || []).filter((t) => t.type === 'const');
-  const bonus = consts.reduce((sum, t) => sum + t.sign * t.value, 0);
   el.innerHTML = `<div class="box">
-      <div class="who">${escapeHtml(rollerName(r.roller_id))} ${r.roller_id === user.id ? 'rolou' : 'está rolando'}</div>
+      <div class="who">${escapeHtml(rollerName(r.roller_id))} ${r.roller_id === user.id ? 'rolou' : 'rolou'}</div>
       ${r.label ? `<div class="label">${escapeHtml(r.label)}</div>` : ''}
-      <div class="tray ${dice.length > 6 ? 'many' : ''}"></div>
-      ${hidden ? `<div class="hint" style="color:rgba(244,239,228,0.7)">e mais ${hidden} ${hidden === 1 ? 'dado' : 'dados'}</div>` : ''}
-      <div class="total" style="visibility:hidden">${r.total}</div>
-      <div class="expr">${escapeHtml(r.expression)}${bonus ? ` <span class="bonus">(${bonus > 0 ? '+' : '−'}${Math.abs(bonus)})</span>` : ''}</div>
+      <div class="total rolling">&nbsp;</div>
+      <div class="expr">${escapeHtml(r.expression)}</div>
       <div class="detail" style="visibility:hidden">${diceDetailHtml(r.result, 120)}</div>
       ${r.visibility === 'secret' ? '<div class="secret-tag"><span class="tag whisper">Rolagem secreta</span></div>' : ''}
     </div>`;
   el.classList.remove('hidden');
-
-  const tray = el.querySelector('.tray');
+  const totalEl = el.querySelector('.total');
+  const range = diceRange(parseDice(r.expression)) || { min: 1, max: 20 };
   const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let longest = 0;
-  dice.forEach((d, i) => {
-    const node = document.createElement('div');
-    node.className = `die-3d${d.negative ? ' negative' : ''}`;
-    node.innerHTML = dieSvg(d.faces, d.faces === 1 ? 1 : Math.ceil(Math.random() * d.faces));
-    tray.appendChild(node);
-    const delay = reduced ? 0 : i * 70;
-    const dur = reduced ? 0 : 1150 + Math.random() * 550;
-    longest = Math.max(longest, delay + dur);
-    const settle = () => {
-      node.innerHTML = dieSvg(d.faces, d.value);
-      node.classList.add('landed');
-      if (!d.kept) node.classList.add('dropped');
-      else if (d.faces > 1 && d.value === d.faces) node.classList.add('crit');
-      else if (d.faces > 1 && d.value === 1) node.classList.add('fumble');
-    };
-    if (reduced) return settle();
-
-    // Vem rolando de um canto da tela, quica e gira até parar
-    const side = Math.random() < 0.5 ? -1 : 1;
-    const fromX = side * (window.innerWidth * 0.55 + Math.random() * 120);
-    const fromY = window.innerHeight * (0.15 + Math.random() * 0.25);
-    const spin = side * (540 + Math.random() * 540);
-    const endRot = (Math.random() - 0.5) * 24;
-    const anim = node.animate(
-      [
-        { transform: `translate(${fromX}px, ${fromY}px) rotate(0deg) scale(0.55)`, opacity: 0 },
-        { transform: `translate(${fromX * 0.5}px, ${-90 - Math.random() * 60}px) rotate(${spin * 0.45}deg) scale(1.08)`, opacity: 1, offset: 0.34 },
-        { transform: `translate(${fromX * 0.18}px, 6px) rotate(${spin * 0.75}deg) scale(1)`, offset: 0.58 },
-        { transform: `translate(${fromX * 0.06}px, -26px) rotate(${spin * 0.9}deg) scale(1.02)`, offset: 0.76 },
-        { transform: `translate(${fromX * 0.015}px, 0px) rotate(${spin * 0.97 + endRot}deg)`, offset: 0.9 },
-        { transform: `translate(0px, 0px) rotate(${endRot}deg) scale(1)`, opacity: 1 },
-      ],
-      { duration: dur, delay, easing: 'cubic-bezier(.25,.7,.35,1)', fill: 'both' },
-    );
-    // Números trocando enquanto rola
-    const flicker = setInterval(() => {
-      if (d.faces > 1) node.querySelector('.die-num').textContent = Math.ceil(Math.random() * d.faces);
-    }, 75);
-    revealTimers.push(flicker);
-    anim.onfinish = () => {
-      clearInterval(flicker);
-      settle();
-    };
-    // Batidas na mesa em cada quique
-    if (i < 10) [0.34, 0.58, 0.76, 0.9].forEach((o, k) => scheduleDiceHit((delay + dur * o) / 1000, 1 - k * 0.22, d.faces));
-  });
-
-  const showTotal = () => {
-    const who = el.querySelector('.who');
-    if (who) who.textContent = `${rollerName(r.roller_id)} rolou`;
-    const total = el.querySelector('.total');
-    total.style.visibility = 'visible';
-    total.classList.add('landed');
+  const land = () => {
+    totalEl.textContent = r.total;
+    totalEl.classList.remove('rolling');
+    totalEl.classList.add('landed');
     el.querySelector('.detail').style.visibility = 'visible';
-    playDiceThud();
   };
-  revealTimers.push(setTimeout(showTotal, longest + 150));
-  revealTimers.push(setTimeout(nextReveal, longest + 4200));
+  if (reduced) land();
+  else {
+    playDiceRattle();
+    const started = Date.now();
+    const spin = () => {
+      if (Date.now() - started >= 900) return land();
+      totalEl.textContent = Math.floor(range.min + Math.random() * (range.max - range.min + 1));
+      revealTimers.push(setTimeout(spin, 55));
+    };
+    spin();
+  }
+  revealTimers.push(setTimeout(nextReveal, 5200));
 }
 $('dice-reveal').onclick = () => nextReveal();
 
-/** Som de um dado batendo na mesa (sintetizado, sem arquivo). */
-function scheduleDiceHit(inSeconds, strength = 1, faces = 20) {
-  if (!audioCtx || audioCtx.state === 'closed') return;
-  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-  try {
-    const t = audioCtx.currentTime + Math.max(0, inSeconds);
-    const vol = Math.max(0, Math.min(1, playerSceneVolume)) * 0.5 * strength;
-    if (vol <= 0) return;
-    // estalo (ruído filtrado)
-    const len = Math.floor(audioCtx.sampleRate * 0.04);
-    const buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let j = 0; j < len; j++) data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / len, 4);
-    const noise = audioCtx.createBufferSource();
-    noise.buffer = buffer;
-    const band = audioCtx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = 2400 + Math.random() * 1800;
-    band.Q.value = 1.2;
-    const g1 = audioCtx.createGain();
-    g1.gain.value = vol;
-    noise.connect(band).connect(g1).connect(audioCtx.destination);
-    noise.start(t);
-    // corpo do dado (tom curto; dados menores soam mais agudos)
-    const osc = audioCtx.createOscillator();
-    osc.type = 'triangle';
-    const base = faces <= 6 ? 1150 : faces <= 12 ? 950 : 800;
-    osc.frequency.setValueAtTime(base + Math.random() * 250, t);
-    osc.frequency.exponentialRampToValueAtTime(base * 0.55, t + 0.06);
-    const g2 = audioCtx.createGain();
-    g2.gain.setValueAtTime(vol * 0.45, t);
-    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
-    osc.connect(g2).connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.08);
-  } catch (err) {
-    console.warn('dice sound', err);
-  }
-}
-
-/** Som do resultado aparecendo. */
-function playDiceThud() {
+/** Som curto de dados rolando, sintetizado (sem arquivo). */
+function playDiceRattle() {
   if (!audioCtx || audioCtx.state === 'closed') return;
   try {
-    const t = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(180, t);
-    osc.frequency.exponentialRampToValueAtTime(70, t + 0.25);
-    const g = audioCtx.createGain();
-    g.gain.setValueAtTime(0.35 * Math.min(1, playerSceneVolume), t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
-    osc.connect(g).connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.4);
+    const now = audioCtx.currentTime;
+    for (let i = 0; i < 7; i++) {
+      const t = now + i * 0.085 + Math.random() * 0.03;
+      const len = Math.floor(audioCtx.sampleRate * 0.03);
+      const buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let j = 0; j < len; j++) data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / len, 3);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1800 + Math.random() * 1600;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.25 * (1 - i / 9) * playerSceneVolume;
+      src.connect(filter).connect(gain).connect(audioCtx.destination);
+      src.start(t);
+    }
   } catch (err) {
     console.warn('dice sound', err);
   }
@@ -1420,9 +1223,7 @@ async function startCall() {
     console.error(err);
     stopCall();
     $('join-btn').disabled = false;
-    $('join-btn').textContent = 'Tentar de novo';
-    $('join-btn').onclick = () => location.reload();
-    $('join-error').textContent = 'Não foi possível conectar à sala em tempo real. Verifique sua internet e tente de novo.';
+    $('join-error').textContent = 'Não foi possível conectar à sala em tempo real. Tente novamente.';
     return;
   }
   $('join-overlay').classList.add('hidden');
@@ -1437,9 +1238,7 @@ function stopCall() {
     channel = null;
   }
   if (screenTrack) screenTrack.stop();
-  if (screenAudioTrack) screenAudioTrack.stop();
   screenTrack = null;
-  screenAudioTrack = null;
   closeAllPeers();
   stopAllSfx();
   musicKey = null;
@@ -1779,7 +1578,6 @@ function setupPlayerControls() {
     playerSceneVolume = Number(vol.value);
     store('rpg-scene-volume', playerSceneVolume);
     updateStage();
-    applyAllRouting();
   };
 }
 
