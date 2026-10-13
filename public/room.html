@@ -173,7 +173,8 @@
         </div>
         <hr class="divider">
         <p class="eyebrow">Dados</p>
-        <form id="player-dice-form" onsubmit="return false">
+        <p class="hint" style="margin:0">O mestre avisa quando for a sua vez de rolar.</p>
+        <form id="player-dice-form" onsubmit="return false" hidden>
           <div class="dice-chips" data-for="player-dice-expr"></div>
           <input id="player-dice-expr" class="mono" maxlength="200" placeholder="1d20+3" autocomplete="off" required>
           <p class="hint dice-preview" id="player-dice-preview"></p>
