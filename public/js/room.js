@@ -193,9 +193,21 @@ function handleRemoved(reason) {
 // Realtime: presença + mudanças no banco + sinalização + efeitos sonoros
 // ---------------------------------------------------------------------------
 
-function connectRealtime() {
+/**
+ * Conecta ao canal da sala. Se a rede cair, o cliente do Supabase reconecta sozinho
+ * e avisa de novo com SUBSCRIBED; aí refazemos a presença e recarregamos o estado.
+ * O canal nunca é recriado (o cliente reaproveita canais pelo nome).
+ */
+function connectRealtime(firstTimeout = 25000) {
   return new Promise((resolve, reject) => {
-    channel = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: sessionId } } });
+    let settled = false;
+    const ch = supabase.channel(`room:${roomId}`, { config: { private: true, presence: { key: sessionId } } });
+    channel = ch;
+    const failTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('timeout'));
+    }, firstTimeout);
     const onChange = () => scheduleRefresh();
     channel
       // Atualizações frequentes (alvo do mestre, mover jogador, sussurro) são aplicadas na hora, sem recarregar.
@@ -227,20 +239,32 @@ function connectRealtime() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dice_rolls', filter: `room_id=eq.${roomId}` }, () => scheduleRolls())
       .on('presence', { event: 'sync' }, onPresenceSync)
       .subscribe(async (status, err) => {
+        if (ch !== channel) return;
         if (status === 'SUBSCRIBED') {
           await trackPresence();
-          scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto conectava
+          scheduleRefresh(); // pega qualquer mudança que aconteceu enquanto estava desconectado
           scheduleRolls();
-          resolve();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          updateConnStatus(false);
-          reject(err || new Error(status));
-        } else if (status === 'CLOSED') {
+          if (!settled) {
+            settled = true;
+            clearTimeout(failTimer);
+            resolve();
+          }
+        } else {
+          if (err) console.warn('realtime', status, err.message);
           updateConnStatus(false);
         }
       });
   });
 }
+
+// Conferência periódica: se algum aviso em tempo real se perder, o estado se corrige sozinho.
+let safetyTicks = 0;
+setInterval(() => {
+  if (!inCall) return;
+  safetyTicks += 1;
+  scheduleRolls();
+  if (safetyTicks % 6 === 0) scheduleRefresh();
+}, 5000);
 
 function pick(obj, keys) {
   const out = {};
@@ -1223,7 +1247,9 @@ async function startCall() {
     console.error(err);
     stopCall();
     $('join-btn').disabled = false;
-    $('join-error').textContent = 'Não foi possível conectar à sala em tempo real. Tente novamente.';
+    $('join-btn').textContent = 'Tentar de novo';
+    $('join-btn').onclick = () => location.reload();
+    $('join-error').textContent = 'Não foi possível conectar à sala em tempo real. Verifique sua internet e tente de novo.';
     return;
   }
   $('join-overlay').classList.add('hidden');
