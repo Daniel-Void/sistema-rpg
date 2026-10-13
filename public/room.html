@@ -25,6 +25,7 @@
     <div class="left">
       <a href="/painel" class="btn sm quiet icon-only" title="Voltar ao painel"><i data-icon="back"></i></a>
       <h1 id="room-name">Carregando</h1>
+      <span id="expires-tag" class="tag hidden" title="Toda sala é excluída 8 horas depois de criada"></span>
       <span id="invite" class="invite hidden">Convite <span class="code" id="invite-code"></span>
         <button id="copy-invite" class="sm quiet icon-only" title="Copiar código"><i data-icon="copy" data-size="15"></i></button>
       </span>
@@ -86,7 +87,10 @@
 
         <div data-panel="cena" hidden>
           <label for="scene-dest" style="margin-top:0">Mostrar para</label>
-          <select id="scene-dest"></select>
+          <div class="inline">
+            <select id="scene-dest"></select>
+            <button id="scene-new-zone" class="sm" title="Criar um novo ambiente e montar a cena dele"><i data-icon="plus" data-size="14"></i>Novo ambiente</button>
+          </div>
           <label>Imagem do ambiente</label>
           <div id="scene-visuals" class="thumbs"></div>
           <label for="scene-caption">Texto na tela</label>

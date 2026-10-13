@@ -86,11 +86,11 @@ async function loadData() {
   const [roomRes, zonesRes, membersRes, mediaRes, tracksRes] = await Promise.all([
     supabase
       .from('rooms')
-      .select(`id, name, description, master_id, master_target, ${SCENE_COLS}, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)`)
+      .select(`id, name, description, master_id, master_target, expires_at, ${SCENE_COLS}, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)`)
       .eq('id', roomId)
       .maybeSingle(),
     supabase.from('zones').select(`id, name, position, ${SCENE_COLS}`).eq('room_id', roomId).eq('archived', false).order('position').order('id'),
-    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, whisper_requested, profile:profiles(display_name)').eq('room_id', roomId),
+    supabase.from('room_members').select('user_id, zone_id, whisper_to_master, whisper_requested, muted_by_master, profile:profiles(display_name)').eq('room_id', roomId),
     supabase.from('room_media').select('id, kind, name, storage_path, created_at').eq('room_id', roomId).order('created_at'),
     supabase.from('music_tracks').select(TRACK_COLS).eq('room_id', roomId).eq('archived', false).order('position'),
   ]);
@@ -153,6 +153,7 @@ function recompute() {
         muted: presence ? presence.muted : false,
         whisperToMaster: m.whisper_to_master,
         whisperRequested: m.whisper_requested,
+        mutedByMaster: Boolean(m.muted_by_master),
       };
     })
     .sort((a, b) => a.displayName.localeCompare(b.displayName, 'pt-BR'));
@@ -164,6 +165,14 @@ function recompute() {
   for (const p of players) if (p.online) participants.set(p.userId, { role: 'jogador', zoneId: p.zoneId, whisperToMaster: p.whisperToMaster });
 
   const allRouting = computeRouting({ participants, masterTarget });
+  // Jogador silenciado pelo mestre: não envia voz e ninguém o ouve
+  for (const p of players) {
+    if (!p.mutedByMaster) continue;
+    if (allRouting[p.userId]) allRouting[p.userId] = { ...allRouting[p.userId], sendTo: [] };
+    for (const id of Object.keys(allRouting)) {
+      allRouting[id] = { ...allRouting[id], hearFrom: allRouting[id].hearFrom.filter((x) => x !== p.userId) };
+    }
+  }
   const myRouting = allRouting[user.id] || emptyRouting;
   const masterSpeaksToMe = Boolean(masterOnline && allRouting[masterId] && allRouting[masterId].sendTo.includes(user.id));
 
@@ -229,6 +238,7 @@ function connectRealtime(firstTimeout = 25000) {
         member.zone_id = row.zone_id;
         member.whisper_to_master = row.whisper_to_master;
         member.whisper_requested = row.whisper_requested;
+        member.muted_by_master = row.muted_by_master;
         if (isMaster && newRequest) toast(`${(member.profile && member.profile.display_name) || 'Um jogador'} pediu para falar em particular.`, 6000);
         recompute();
       })
@@ -617,13 +627,29 @@ function tuneScreenSender(peer) {
   }
 }
 
-function volumeFor(userId) {
-  if (!isMaster || !state) return 1;
-  const p = playerById(userId);
-  if (!p) return 1;
-  const v = zoneVolumes[p.zoneId];
+// Volume de cada pessoa, escolhido por quem ouve (fica salvo neste aparelho)
+const personVolumes = readStored('rpg-person-volumes', {});
+function personVolume(userId) {
+  const v = personVolumes[userId];
   return typeof v === 'number' ? v : 1;
 }
+
+function volumeFor(userId) {
+  let vol = personVolume(userId);
+  if (!isMaster || !state) return vol;
+  const p = playerById(userId);
+  if (!p) return vol;
+  const v = zoneVolumes[p.zoneId];
+  return typeof v === 'number' ? vol * v : vol;
+}
+
+document.addEventListener('input', (e) => {
+  const input = e.target.closest && e.target.closest('input[data-pvol]');
+  if (!input) return;
+  personVolumes[input.dataset.pvol] = Number(input.value);
+  store('rpg-person-volumes', personVolumes);
+  applyAllRouting();
+});
 
 function applyAllRouting() {
   for (const peer of peers.values()) applyPeerRouting(peer);
@@ -1731,6 +1757,25 @@ function renderMuteButton() {
 }
 renderMuteButton();
 
+// Jogador silenciado pelo mestre: avisa e trava o botão do microfone
+let silencedByMaster = false;
+function renderMasterMute() {
+  const me = playerById(user.id);
+  const silenced = Boolean(me && me.mutedByMaster);
+  if (silenced !== silencedByMaster) {
+    toast(silenced ? 'O mestre silenciou você. Ninguém ouve sua voz agora.' : 'O mestre liberou sua voz.', 6000);
+    silencedByMaster = silenced;
+  }
+  if (silenced) {
+    $('mute-btn').innerHTML = `${icon('micOff', 16)}<span>Silenciado pelo mestre</span>`;
+    $('mute-btn').classList.add('active');
+    $('mute-btn').disabled = true;
+  } else {
+    renderMuteButton();
+    $('mute-btn').disabled = !inCall || !micTrack;
+  }
+}
+
 $('leave-btn').onclick = () => {
   stopCall();
   location.href = '/painel';
@@ -1776,6 +1821,7 @@ function targetOptions(selected, { players = false } = {}) {
 
 let sfxTarget = { type: 'all' };
 let sceneDest = 'room'; // 'room' ou id do ambiente
+let pendingSceneZone = null; // nome do ambiente criado pela aba Cena, até ele chegar do banco
 let sceneDraft = null;
 
 function setupMasterControls() {
@@ -1814,6 +1860,8 @@ function setupMasterControls() {
     if (btn.dataset.action === 'narrate') setTarget({ type: 'zone', zoneId });
     if (btn.dataset.action === 'whisper-start') rpc('start_whisper', { p_user_id: btn.dataset.user });
     if (btn.dataset.action === 'whisper-end') rpc('end_whisper', { p_user_id: btn.dataset.user });
+    if (btn.dataset.action === 'mute') rpc('set_member_muted', { p_user_id: btn.dataset.user, p_muted: btn.dataset.muted !== '1' });
+    if (btn.dataset.action === 'kick') kickPlayer(btn.dataset.user);
     if (btn.dataset.action === 'rename') {
       const name = prompt('Novo nome do ambiente:', zoneById(zoneId).name);
       if (name && name.trim()) rpc('rename_zone', { p_zone_id: zoneId, p_name: name.trim() });
@@ -1825,6 +1873,13 @@ function setupMasterControls() {
       openSceneEditor(zoneId);
     }
   });
+  async function kickPlayer(userId) {
+    if (!confirm(`Remover ${nameOf(userId)} da sala? Para voltar, a pessoa vai precisar do código de convite.`)) return;
+    const { error } = await supabase.from('room_members').delete().eq('room_id', roomId).eq('user_id', userId);
+    if (error) return toast(friendlyError(error));
+    toast(`${nameOf(userId)} foi removido da sala.`);
+    scheduleRefresh();
+  }
   zonesEl.addEventListener('change', (e) => {
     const sel = e.target.closest('select[data-move]');
     if (sel) rpc('move_player', { p_user_id: sel.dataset.move, p_zone_id: Number(sel.value) });
@@ -1884,6 +1939,13 @@ function setupMasterControls() {
     renderSceneEditor();
   };
   $('scene-caption').oninput = (e) => (sceneDraft.caption = e.target.value);
+  $('scene-new-zone').onclick = async () => {
+    const name = (prompt('Nome do novo ambiente (ex.: Floresta, Caverna):') || '').trim().slice(0, 40);
+    if (!name) return;
+    if (!(await rpc('create_zone', { p_name: name }))) return;
+    pendingSceneZone = name;
+    scheduleRefresh();
+  };
   $('scene-apply').onclick = () => applyScene(sceneDraft);
   $('scene-clear').onclick = () => applyScene({ visualId: null, youtube: '', caption: '', volume: 0.6 }, true);
 
@@ -2019,7 +2081,7 @@ function setupPlayerControls() {
 // Renderização
 // ---------------------------------------------------------------------------
 
-function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, whisperRequested, master, zoneId }) {
+function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, whisperRequested, mutedByMaster, master, zoneId }) {
   const me = userId === user.id;
   const draggable = isMaster && !master;
   const zoneOptions =
@@ -2034,21 +2096,34 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
         ? `<button class="sm icon-only whisper-active" data-action="whisper-end" data-user="${escapeHtml(userId)}" title="Encerrar sussurro com ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
         : `<button class="sm icon-only ${whisperRequested ? 'whisper-active' : ''}" data-action="whisper-start" data-user="${escapeHtml(userId)}" title="${whisperRequested ? 'Aceitar pedido de' : 'Iniciar sussurro com'} ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
       : '';
-  const sub = master ? (isOnline ? 'Mestre, na call' : 'Mestre, fora da call') : isOnline ? 'Na call' : 'Fora da call';
+  const name = escapeHtml(displayName);
+  // Mestre: silenciar e remover jogadores
+  const masterBtns =
+    isMaster && !master
+      ? `<button class="sm icon-only ${mutedByMaster ? 'whisper-active' : ''}" data-action="mute" data-user="${escapeHtml(userId)}" data-muted="${mutedByMaster ? 1 : 0}" title="${mutedByMaster ? `Deixar ${name} falar de novo` : `Silenciar ${name} para todos`}">${icon(mutedByMaster ? 'micOff' : 'mic', 15)}</button>
+         <button class="sm icon-only danger" data-action="kick" data-user="${escapeHtml(userId)}" title="Remover ${name} da sala">${icon('logout', 15)}</button>`
+      : '';
+  // Qualquer um: volume de cada pessoa só para si
+  const volume =
+    !me && isOnline
+      ? `<span class="pvol" title="Volume de ${name} para você">${icon('volume', 13)}<input type="range" min="0" max="1" step="0.05" value="${personVolume(userId)}" data-pvol="${escapeHtml(userId)}" aria-label="Volume de ${name}"></span>`
+      : '';
+  const sub = master ? (isOnline ? 'Na call' : 'Fora da call') : isOnline ? 'Na call' : 'Fora da call';
   return `
     <div class="person ${isOnline ? '' : 'offline'} ${master ? 'master' : ''} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
          data-user="${escapeHtml(userId)}" ${draggable ? 'draggable="true"' : ''}>
       <div class="avatar">${escapeHtml(initials(displayName))}</div>
       <div class="info">
+        ${master ? '<div class="role">Mestre</div>' : ''}
         <div class="name">${escapeHtml(displayName)}${me ? ' <span class="muted">(você)</span>' : ''}</div>
         <div class="sub">${sub}</div>
       </div>
       <div class="badges">
-        ${isMuted ? `<span title="Microfone desligado">${icon('micOff', 15)}</span>` : ''}
+        ${mutedByMaster ? '<span class="tag danger" title="O mestre silenciou este jogador">silenciado</span>' : isMuted ? `<span title="Microfone desligado">${icon('micOff', 15)}</span>` : ''}
         ${whisperToMaster && isOnline ? '<span class="tag whisper">em sussurro</span>' : ''}
         ${whisperRequested && !whisperToMaster && isOnline ? '<span class="tag accent">pediu sussurro</span>' : ''}
       </div>
-      ${zoneOptions || whisperBtn ? `<div class="controls">${zoneOptions}${whisperBtn}</div>` : ''}
+      ${zoneOptions || whisperBtn || masterBtns || volume ? `<div class="controls">${volume}${zoneOptions}${whisperBtn}${masterBtns}</div>` : ''}
     </div>`;
 }
 
@@ -2122,6 +2197,7 @@ function render() {
   } else {
     renderHearing();
     renderPlayerWhisper();
+    renderMasterMute();
     renderDice();
   }
 }
@@ -2216,6 +2292,15 @@ function renderShareControls() {
 
 function renderSceneEditor() {
   if (!isMaster || !state) return;
+  // Ambiente recém-criado pelo botão "Novo ambiente": já abre a cena dele
+  if (pendingSceneZone) {
+    const created = db.zones.filter((z) => z.name === pendingSceneZone).sort((x, y) => y.id - x.id)[0];
+    if (created) {
+      pendingSceneZone = null;
+      sceneDest = created.id;
+      loadSceneDraft();
+    }
+  }
   if (!sceneDraft || (sceneDest !== 'room' && !db.zones.some((z) => z.id === sceneDest))) {
     sceneDest = sceneDest !== 'room' && db.zones.some((z) => z.id === sceneDest) ? sceneDest : 'room';
     loadSceneDraft();
@@ -2308,7 +2393,9 @@ function renderMixer() {
           <button class="sm quiet icon-only" data-mix="stop" title="Parar e voltar ao início" ${t.status === 'stopped' ? 'disabled' : ''}>${icon('stop', 14)}</button>
           ${i < list.length - 1 ? `<button class="sm quiet icon-only" data-mix="next" title="Ir para a próxima faixa">${icon('next', 14)}</button>` : ''}
         </div>
-        <div class="track-bar"><span data-bar style="width:${pct}%"></span></div>
+        ${t.duration_s && !isList
+          ? `<input type="range" class="track-seek" min="0" max="${Math.floor(t.duration_s)}" step="1" value="${Math.floor(trackPosition(t, serverNow()))}" data-mix-seek title="Arraste para escolher a minutagem" style="--pct:${pct}%">`
+          : `<div class="track-bar" title="A minutagem fica disponível depois que a faixa tocar uma vez"><span data-bar style="width:${pct}%"></span></div>`}
         <div class="track-controls">
           <button class="chip-toggle ${t.loop ? 'on' : ''}" data-mix="loop" title="Repetir esta faixa sem parar">${icon('repeat', 13)}Repetir</button>
           <button class="chip-toggle ${t.chain && !t.loop ? 'on' : ''}" data-mix="chain" title="Ao terminar, tocar a faixa de baixo" ${t.loop ? 'disabled' : ''}>${icon('next', 13)}Depois</button>
@@ -2335,6 +2422,11 @@ function updateMixerProgress() {
     if (time && time.textContent !== 'Playlist') time.textContent = trackTimeText(t);
     const bar = row.querySelector('[data-bar]');
     if (bar && t.duration_s) bar.style.width = `${Math.min(100, (trackPosition(t, now) / t.duration_s) * 100)}%`;
+    const seek = row.querySelector('[data-mix-seek]');
+    if (seek && seek !== document.activeElement && t.duration_s) {
+      seek.value = Math.floor(trackPosition(t, now));
+      seek.style.setProperty('--pct', `${Math.min(100, (trackPosition(t, now) / t.duration_s) * 100)}%`);
+    }
   }
 }
 
@@ -2382,6 +2474,14 @@ function setupMixerControls() {
   };
   let volTimer = null;
   $('mixer').oninput = (e) => {
+    if (e.target.matches('[data-mix-seek]')) {
+      // Mostra a minutagem enquanto arrasta; envia ao soltar
+      const t = db.tracks.find((x) => x.id === Number(e.target.closest('[data-track]').dataset.track));
+      const time = e.target.closest('.track').querySelector('[data-time]');
+      if (t && time) time.textContent = `${formatTime(e.target.value)} / ${formatTime(t.duration_s)}`;
+      e.target.style.setProperty('--pct', `${(e.target.value / e.target.max) * 100}%`);
+      return;
+    }
     if (!e.target.matches('[data-mix-volume]')) return;
     const id = Number(e.target.closest('[data-track]').dataset.track);
     const value = Number(e.target.value);
@@ -2392,6 +2492,21 @@ function setupMixerControls() {
     volTimer = setTimeout(() => musicControl(id, 'volume', value), 250);
   };
   $('mixer').onchange = (e) => {
+    if (e.target.matches('[data-mix-seek]')) {
+      const id = Number(e.target.closest('[data-track]').dataset.track);
+      const value = Number(e.target.value);
+      const t = db.tracks.find((x) => x.id === id);
+      // Aplica na hora para quem ouve aqui; o banco avisa os jogadores
+      if (t) {
+        t.offset_s = value;
+        if (t.status === 'playing') t.started_at = new Date(serverNow()).toISOString();
+        else if (t.status === 'stopped') t.status = 'paused';
+      }
+      e.target.blur();
+      syncMusic();
+      musicControl(id, 'seek', value);
+      return;
+    }
     if (!e.target.matches('[data-mix-volume]')) return;
     e.target.blur();
     if (mixerPending) setTimeout(renderMixer, 300);
@@ -2466,6 +2581,24 @@ if (!db) {
     $('copy-invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado.'));
   }
   $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
+  // Toda sala é excluída 8 h depois de criada: mostra quanto falta e avisa perto do fim
+  const expiresAt = Date.parse(db.room.expires_at);
+  let warnedExpiry = false;
+  const updateExpiry = () => {
+    const min = Math.ceil((expiresAt - Date.now()) / 60000);
+    const el = $('expires-tag');
+    el.classList.toggle('hidden', !(min > 0));
+    el.textContent = min > 60 ? `Expira em ${Math.floor(min / 60)}h ${min % 60}min` : `Expira em ${Math.max(0, min)} min`;
+    el.classList.toggle('accent', min <= 30);
+    if (min <= 15 && min > 0 && !warnedExpiry) {
+      warnedExpiry = true;
+      toast(`Esta sala será excluída em ${min} min.`, 8000);
+    }
+  };
+  if (expiresAt) {
+    updateExpiry();
+    setInterval(updateExpiry, 30000);
+  }
   setupDiceControls();
   loadRolls();
   if (isMaster) {

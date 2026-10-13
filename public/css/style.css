@@ -200,6 +200,10 @@ label { display: block; font-size: 0.82rem; color: var(--text-2); margin: 0.9rem
   font-size: 0.8rem; font-weight: 600; letter-spacing: 0.02em; transition: box-shadow 0.1s, border-color 0.1s;
 }
 .person.master .avatar { color: var(--accent); border-color: rgba(200, 85, 61, 0.5); }
+.person.master { padding: 0.65rem 0.75rem; gap: 0.8rem; }
+.person.master .avatar { width: 44px; height: 44px; font-size: 0.95rem; border-width: 2px; }
+.person.master .role { font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+.person.master .name { font-family: var(--font-display); font-size: 1.3rem; line-height: 1.2; color: var(--text); }
 .person.speaking .avatar { border-color: var(--ok); box-shadow: 0 0 0 2px rgba(127, 163, 107, 0.35); }
 .person .info { min-width: 0; flex: 1; }
 .person .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.93rem; }
@@ -330,7 +334,20 @@ body.immersive .scene-text:not(:empty) {
 /* Interface sobre o ambiente: vidro escuro translúcido, o ambiente aparece por trás */
 body.immersive .topbar, body.immersive .room-layout { position: relative; z-index: 1; transition: opacity 0.9s ease; }
 body.immersive .topbar { background: linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0)); border-bottom-color: transparent; }
-body.immersive .room-main { min-height: calc(100vh - 92px); justify-content: flex-end; }
+/* Jogador no ambiente: coluna à esquerda com o mestre no topo e os ambientes
+   logo abaixo, na mesma largura; o texto da cena fica ao lado. */
+body.immersive .room-main {
+  min-height: calc(100vh - 92px); display: grid; align-content: start; column-gap: 1.5rem; row-gap: 0.75rem;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+}
+body.immersive .master-row { grid-column: 1; grid-row: 1; }
+body.immersive .zones { grid-column: 1; grid-row: 2; grid-template-columns: 1fr; align-self: start; }
+body.immersive .scene-text { grid-column: 2; grid-row: 1 / span 3; }
+body.immersive .stage { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
+@media (max-width: 760px) {
+  body.immersive .room-main { grid-template-columns: 1fr; }
+  body.immersive .master-row, body.immersive .zones, body.immersive .scene-text, body.immersive .stage { grid-column: 1; grid-row: auto; }
+}
 body.immersive .panel,
 body.immersive .zone,
 body.immersive .status-box,
@@ -497,3 +514,9 @@ label.check input { width: auto; }
 .mixer-foot { align-items: center; justify-content: space-between; margin-top: 0.75rem; }
 .check { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.85rem; color: var(--text-2); cursor: pointer; }
 .check input { width: auto; margin: 0; }
+.track-seek { width: 100%; margin: 0.45rem 0 0.35rem; height: 14px; padding: 0; background: transparent; accent-color: var(--accent); }
+
+/* Volume por pessoa e ações do mestre no card */
+.person .pvol { display: inline-flex; align-items: center; gap: 0.3rem; flex: 1; min-width: 80px; color: var(--muted); }
+.person .pvol input { flex: 1; min-width: 0; }
+.tag.danger { color: var(--danger); border-color: rgba(200, 85, 61, 0.5); }

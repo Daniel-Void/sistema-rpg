@@ -19,10 +19,29 @@ document.getElementById('logout').addEventListener('click', async () => {
 
 const roomsEl = document.getElementById('rooms');
 
+/** "Expira em 5h 12min" */
+function expiresText(expiresAt) {
+  const ms = Date.parse(expiresAt) - Date.now();
+  if (!(ms > 0)) return 'Expirando';
+  const min = Math.ceil(ms / 60000);
+  const h = Math.floor(min / 60);
+  return `Expira em ${h ? `${h}h ` : ''}${min % 60}min`;
+}
+
+// Arquivos (imagens, áudios) de salas que já expiraram: o Storage só deixa
+// apagar pela API, então quem enviou limpa ao abrir o painel.
+async function cleanupOrphanFiles() {
+  const { data, error } = await supabase.rpc('my_orphan_files');
+  if (error || !data || !data.length) return;
+  const names = data.map((row) => (typeof row === 'string' ? row : row.my_orphan_files)).filter(Boolean);
+  for (let i = 0; i < names.length; i += 100) await supabase.storage.from('midia').remove(names.slice(i, i + 100));
+}
+
 async function loadRooms() {
   const { data: rooms, error } = await supabase
     .from('rooms')
-    .select('id, name, description, master_id, created_at, master:profiles!rooms_master_id_fkey(display_name), room_members(count), room_invites(code)')
+    .select('id, name, description, master_id, created_at, expires_at, master:profiles!rooms_master_id_fkey(display_name), room_members(count), room_invites(code)')
+    .gt('expires_at', new Date().toISOString())
     .order('created_at', { ascending: false });
   if (error) throw error;
   if (!rooms.length) {
@@ -43,6 +62,7 @@ async function loadRooms() {
         <div class="meta">
           ${isMaster ? '<span class="tag accent">Você é o mestre</span>' : `<span class="tag">Mestre: ${escapeHtml(r.master && r.master.display_name)}</span>`}
           <span class="tag">${icon('users', 13)}${players} ${players === 1 ? 'jogador' : 'jogadores'}</span>
+          <span class="tag" title="Toda sala é excluída 8 horas depois de criada">${expiresText(r.expires_at)}</span>
         </div>
         ${isMaster && code ? `<div class="invite">Convite <span class="code">${escapeHtml(code)}</span> <button class="sm quiet icon-only" data-copy="${escapeHtml(code)}" title="Copiar código">${icon('copy', 15)}</button></div>` : ''}
         <div class="actions">
@@ -103,3 +123,4 @@ document.getElementById('join-form').addEventListener('submit', async (e) => {
 });
 
 loadRooms().catch((err) => toast(friendlyError(err)));
+cleanupOrphanFiles().catch(() => {});
