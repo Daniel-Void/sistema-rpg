@@ -25,7 +25,7 @@ Exemplo: o jogador 1 vai para a floresta. O mestre cria o ambiente *Floresta*, a
 
 ## Funcionalidade 2: compartilhamento de tela
 
-O mestre clica em **Compartilhar tela** na barra superior e escolhe para quem: **Todos** ou um **ambiente** específico. A tela aparece no palco dos jogadores escolhidos. Quem não está no alvo não recebe nenhum quadro de vídeo. Dá para trocar o alvo durante o compartilhamento.
+O mestre clica em **Compartilhar tela** na barra superior e escolhe para quem: **Todos** ou um **ambiente** específico. **O som também vai junto**: ao compartilhar uma aba no Chrome/Edge, marque "Compartilhar áudio da aba" (ótimo para mostrar um vídeo ou uma música). A própria aba do site não aparece na lista, para evitar o efeito espelho. Compartilhar exige computador; no celular dá para assistir, não para compartilhar. A tela aparece no palco dos jogadores escolhidos. Quem não está no alvo não recebe nenhum quadro de vídeo. Dá para trocar o alvo durante o compartilhamento.
 
 ## Funcionalidade 3: ambientes imersivos, música e efeitos
 
@@ -54,7 +54,7 @@ Na aba **Sons**, o mestre dispara **efeitos sonoros** (áudios enviados para a b
 | **Mestre rolando** | Escolhe "Quem rola: Eu (mestre)" e clica em **Rolar**, aberto ou **secreto**. |
 | **Mestre mandando rolar** | Escolhe um jogador em "Quem rola" (ex.: Jogador 1, `2d20`, "Teste de Força") e clica em **Mandar rolar**. O pedido aparece na tela do jogador com um botão **Rolar**. O mestre pode cancelar enquanto o jogador não rola. |
 
-O resultado aparece em destaque na tela de todos, com animação e som de dados. Rolagens **secretas** só aparecem para o mestre e para quem rolou. Cada rolagem fica no histórico, com cada dado mostrado: os descartados aparecem riscados, os máximos em verde e os 1 em vermelho.
+O resultado aparece na tela de todos: **dados desenhados (d4, d6, d8, d10, d12, d20, d100 e os demais) entram rolando, quicam e giram com os números trocando, com som de batida na mesa a cada quique**, e param exatamente nos valores sorteados pelo banco. Dados descartados ficam apagados, máximos brilham e 1 fica vermelho; em seguida aparece o total. Rolagens **secretas** só aparecem para o mestre e para quem rolou. Cada rolagem fica no histórico, com cada dado mostrado: os descartados aparecem riscados, os máximos em verde e os 1 em vermelho.
 
 **Notação aceita** (de `1d1` até `1000d1000` em cada termo):
 

@@ -397,7 +397,7 @@ label.check input { width: auto; }
 @keyframes prompt-in { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* Revelação do resultado */
-.dice-reveal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.25) 70%); cursor: pointer; animation: fade-in 0.25s ease both; }
+.dice-reveal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0.55) 75%); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); cursor: pointer; animation: fade-in 0.25s ease both; }
 .dice-reveal .box { text-align: center; color: #f4efe4; padding: 1rem 1.5rem; max-width: min(640px, calc(100% - 32px)); }
 .dice-reveal .who { font-size: 0.95rem; color: rgba(244, 239, 228, 0.8); letter-spacing: 0.04em; }
 .dice-reveal .label { font-family: var(--font-display); font-size: 1.3rem; margin-top: 0.2rem; }
@@ -412,3 +412,25 @@ label.check input { width: auto; }
 .dice-reveal .secret-tag { margin-top: 0.75rem; }
 @keyframes land { from { transform: scale(1.35); } to { transform: scale(1); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Dados rolando */
+.dice-reveal .tray { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin: 1.4rem auto 0.4rem; max-width: 620px; min-height: 92px; }
+.dice-reveal .tray.many { gap: 10px; }
+.die-3d { position: relative; width: 84px; height: 84px; will-change: transform; filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.55)); }
+.tray.many .die-3d { width: 64px; height: 64px; }
+.die-3d svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.die-3d .die-body { fill: #ece3d0; stroke: #fff8ea; stroke-width: 3; stroke-linejoin: round; }
+.die-3d .die-edge { fill: none; stroke: rgba(80, 60, 40, 0.16); stroke-width: 2.5; stroke-linejoin: round; }
+.die-3d .die-num { font-family: 'Spectral', Georgia, serif; font-weight: 600; fill: #2a1d14; }
+.die-3d .die-type { position: absolute; left: 50%; bottom: -18px; transform: translateX(-50%); font-family: var(--font-mono); font-size: 0.68rem; color: rgba(244, 239, 228, 0.6); opacity: 0; transition: opacity 0.3s; }
+.die-3d.landed .die-type { opacity: 1; }
+.die-3d.negative .die-body { fill: #d9c9c2; }
+.die-3d.landed { animation: die-settle 0.35s ease-out; }
+.die-3d.crit .die-body { fill: #f3e6b6; stroke: #ffe28a; stroke-width: 4; }
+.die-3d.crit { filter: drop-shadow(0 0 14px rgba(255, 214, 102, 0.75)) drop-shadow(0 10px 14px rgba(0, 0, 0, 0.55)); }
+.die-3d.fumble .die-body { fill: #e9c3b8; stroke: #ff9a86; }
+.die-3d.fumble .die-num { fill: #7a1f12; }
+.die-3d.dropped { opacity: 0.38; filter: grayscale(1) drop-shadow(0 6px 8px rgba(0, 0, 0, 0.4)); }
+.die-3d.dropped .die-num { text-decoration: line-through; }
+.dice-reveal .bonus { color: rgba(244, 239, 228, 0.9); }
+@keyframes die-settle { 0% { scale: 1.12; } 100% { scale: 1; } }
