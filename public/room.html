@@ -100,6 +100,7 @@
             <button id="scene-apply" class="primary">Aplicar cena</button>
             <button id="scene-clear">Limpar</button>
           </div>
+          <button id="scene-preview" style="width:100%;margin-top:0.5rem"><i data-icon="eye" data-size="15"></i>Ver como o jogador</button>
           <hr class="divider">
           <div class="upload-row">
             <p class="eyebrow" style="margin:0;flex:1">Biblioteca</p>
@@ -194,6 +195,14 @@
 
   <button id="audio-unlock" class="audio-unlock hidden"><i data-icon="volume" data-size="16"></i><span>Toque para ativar o som da call</span></button>
   <button id="ui-restore" class="ui-restore hidden" title="Mostrar interface (H)"><i data-icon="eye" data-size="16"></i><span>Mostrar interface</span></button>
+
+  <!-- Prévia do mestre: a cena como o jogador vê -->
+  <div id="preview-bar" class="preview-bar hidden" role="status">
+    <i data-icon="eye" data-size="16"></i>
+    <span>Visão do jogador: <b id="preview-label"></b></span>
+    <button id="preview-apply" class="sm primary hidden">Aplicar esta cena</button>
+    <button id="preview-exit" class="sm">Sair da prévia <kbd>Esc</kbd></button>
+  </div>
 
   <div id="join-overlay" class="overlay">
     <div class="panel">

@@ -35,6 +35,7 @@ let micTrack = null;
 let screenTrack = null;
 let screenAudioTrack = null; // áudio da aba/tela compartilhada (opcional)
 let shareTarget = { type: 'all' };
+let scenePreview = null; // mestre vendo a cena como o jogador: { scene, zone, label, draft }
 let audioCtx = null;
 let muted = false;
 let isMaster = false;
@@ -743,6 +744,11 @@ function updateStage() {
   if (!isMaster) {
     const zoneRow = db.zones.find((z) => z.id === me.zoneId);
     updateEnvironment(effectiveScene(db.room, zoneRow), zoneRow);
+  } else if (scenePreview) {
+    // Mestre vendo a cena como o jogador vê
+    updateEnvironment(scenePreview.scene, scenePreview.zone);
+  } else if (document.body.classList.contains('immersive')) {
+    updateEnvironment(null, null);
   }
 
   stage.classList.toggle('hidden', key === 'none');
@@ -1850,7 +1856,10 @@ function setupMasterControls() {
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !e.target.closest('input, textarea, select')) setTarget({ type: 'all' });
+    if (e.key !== 'Escape' || e.target.closest('input, textarea, select')) return;
+    // Esc fecha a prévia da cena; fora dela, volta a falar com todos
+    if (scenePreview) closeScenePreview();
+    else setTarget({ type: 'all' });
   });
 
   const zonesEl = $('zones');
@@ -1873,6 +1882,7 @@ function setupMasterControls() {
     if (btn.dataset.action === 'edit-scene') {
       openSceneEditor(zoneId);
     }
+    if (btn.dataset.action === 'preview') openScenePreview(zoneId);
   });
   async function kickPlayer(userId) {
     if (!confirm(`Remover ${nameOf(userId)} da sala? Para voltar, a pessoa vai precisar do código de convite.`)) return;
@@ -1948,6 +1958,12 @@ function setupMasterControls() {
     scheduleRefresh();
   };
   $('scene-apply').onclick = () => applyScene(sceneDraft);
+  $('scene-preview').onclick = () => openScenePreview(sceneDest, sceneDraft);
+  $('preview-exit').onclick = closeScenePreview;
+  $('preview-apply').onclick = async () => {
+    await applyScene(sceneDraft);
+    closeScenePreview();
+  };
   $('scene-clear').onclick = () => applyScene({ visualId: null, youtube: '', caption: '', volume: 0.6 }, true);
 
   $('media-input').onchange = (e) => {
@@ -1994,6 +2010,35 @@ function loadSceneDraft() {
     volume: typeof src.ambient_volume === 'number' ? src.ambient_volume : 0.6,
   };
   $('scene-caption').value = sceneDraft.caption;
+}
+
+// ----- Prévia: o mestre vê a cena como o jogador vê -----
+
+/** Abre a prévia. Com `draft`, mostra o rascunho da aba Cena (antes de aplicar). */
+function openScenePreview(dest, draft = null) {
+  const zone = dest === 'room' ? null : db.zones.find((z) => z.id === dest) || null;
+  let scene;
+  if (draft) {
+    const caption = String(draft.caption || '').trim();
+    scene = draft.visualId || caption ? { visualId: draft.visualId, youtube: null, caption, volume: draft.volume, from: zone ? 'zone' : 'room' } : null;
+  } else {
+    scene = effectiveScene(db.room, zone);
+  }
+  if (!scene) return toast('Este ambiente ainda não tem cena (imagem ou texto) para mostrar.');
+  scenePreview = { scene, zone, draft: Boolean(draft), label: zone ? zone.name : 'Cena padrão' };
+  document.body.classList.add('previewing');
+  $('preview-label').textContent = `${scenePreview.label}${draft ? ' (rascunho)' : ''}`;
+  $('preview-apply').classList.toggle('hidden', !draft);
+  $('preview-bar').classList.remove('hidden');
+  updateStage();
+}
+
+function closeScenePreview() {
+  if (!scenePreview) return;
+  scenePreview = null;
+  document.body.classList.remove('previewing');
+  $('preview-bar').classList.add('hidden');
+  updateStage();
 }
 
 function openSceneEditor(zoneId) {
@@ -2163,6 +2208,7 @@ function render() {
           ${
             isMaster
               ? `<div class="tools">
+                  <button class="sm quiet icon-only" data-action="preview" data-zone="${zone.id}" title="Ver como o jogador vê este ambiente">${icon('eye', 15)}</button>
                   <button class="sm quiet icon-only" data-action="edit-scene" data-zone="${zone.id}" title="Editar cena deste ambiente">${icon('image', 15)}</button>
                   <button class="sm quiet icon-only" data-action="rename" data-zone="${zone.id}" title="Renomear">${icon('pencil', 15)}</button>
                   ${state.zones.length > 1 ? `<button class="sm quiet icon-only" data-action="delete" data-zone="${zone.id}" title="Excluir">${icon('trash', 15)}</button>` : ''}

@@ -522,3 +522,19 @@ label.check input { width: auto; }
 .person .pvol { display: inline-flex; align-items: center; gap: 0.3rem; flex: 1; min-width: 80px; color: var(--muted); }
 .person .pvol input { flex: 1; min-width: 0; }
 .tag.danger { color: var(--danger); border-color: rgba(200, 85, 61, 0.5); }
+
+/* Prévia do mestre: só a cena, como o jogador vê, com uma barra para sair */
+body.previewing .topbar, body.previewing .side, body.previewing .master-row,
+body.previewing .zones, body.previewing .stage, body.previewing .ui-restore { display: none !important; }
+body.previewing .room-layout { grid-template-columns: 1fr; }
+.preview-bar {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 80;
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-content: center;
+  padding: 0.55rem 0.6rem 0.55rem 1rem; max-width: calc(100% - 32px);
+  border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px;
+  background: rgba(14, 13, 12, 0.72); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  color: var(--text-2); font-size: 0.88rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.preview-bar b { color: var(--text); font-weight: 600; }
+.preview-bar .icon { color: var(--accent); }
+.preview-bar kbd { margin-left: 0.3rem; }
