@@ -19,16 +19,7 @@ document.getElementById('logout').addEventListener('click', async () => {
 
 const roomsEl = document.getElementById('rooms');
 
-/** "Expira em 5h 12min" */
-function expiresText(expiresAt) {
-  const ms = Date.parse(expiresAt) - Date.now();
-  if (!(ms > 0)) return 'Expirando';
-  const min = Math.ceil(ms / 60000);
-  const h = Math.floor(min / 60);
-  return `Expira em ${h ? `${h}h ` : ''}${min % 60}min`;
-}
-
-// Arquivos (imagens, áudios) de salas que já expiraram: o Storage só deixa
+// Arquivos (imagens, áudios) de salas que já foram excluídas: o Storage só deixa
 // apagar pela API, então quem enviou limpa ao abrir o painel.
 async function cleanupOrphanFiles() {
   const { data, error } = await supabase.rpc('my_orphan_files');
@@ -43,7 +34,6 @@ async function loadRooms() {
     .select('*, master:profiles!rooms_master_id_fkey(display_name), room_members(count), room_invites(code)')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  rooms = rooms.filter((r) => !r.expires_at || Date.parse(r.expires_at) > Date.now());
   if (!rooms.length) {
     roomsEl.innerHTML = `<div class="empty">${
       user.role === 'mestre' ? 'Nenhuma sala ainda. Crie a primeira acima!' : 'Você ainda não está em nenhuma sala. Use o código de convite do seu mestre.'
@@ -62,7 +52,6 @@ async function loadRooms() {
         <div class="meta">
           ${isMaster ? '<span class="tag accent">Você é o mestre</span>' : `<span class="tag">Mestre: ${escapeHtml(r.master && r.master.display_name)}</span>`}
           <span class="tag">${icon('users', 13)}${players} ${players === 1 ? 'jogador' : 'jogadores'}</span>
-          ${r.expires_at ? `<span class="tag" title="Toda sala é excluída 8 horas depois de criada">${expiresText(r.expires_at)}</span>` : ''}
         </div>
         ${isMaster && code ? `<div class="invite">Convite <span class="code">${escapeHtml(code)}</span> <button class="sm quiet icon-only" data-copy="${escapeHtml(code)}" title="Copiar código">${icon('copy', 15)}</button></div>` : ''}
         <div class="actions">

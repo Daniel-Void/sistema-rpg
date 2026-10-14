@@ -88,7 +88,6 @@ async function loadData() {
   const [roomRes, zonesRes, membersRes, mediaRes, tracksRes] = await Promise.all([
     supabase
       .from('rooms')
-      // '*' para funcionar antes e depois da migração 17 (expires_at)
       .select('*, master:profiles!rooms_master_id_fkey(display_name), room_invites(code)')
       .eq('id', roomId)
       .maybeSingle(),
@@ -2706,24 +2705,6 @@ if (!db) {
     $('copy-invite').onclick = () => navigator.clipboard.writeText(inviteCode).then(() => toast('Código copiado.'));
   }
   $(isMaster ? 'master-panel' : 'player-panel').classList.remove('hidden');
-  // Toda sala é excluída 8 h depois de criada: mostra quanto falta e avisa perto do fim
-  const expiresAt = Date.parse(db.room.expires_at);
-  let warnedExpiry = false;
-  const updateExpiry = () => {
-    const min = Math.ceil((expiresAt - Date.now()) / 60000);
-    const el = $('expires-tag');
-    el.classList.toggle('hidden', !(min > 0));
-    el.textContent = min > 60 ? `Expira em ${Math.floor(min / 60)}h ${min % 60}min` : `Expira em ${Math.max(0, min)} min`;
-    el.classList.toggle('accent', min <= 30);
-    if (min <= 15 && min > 0 && !warnedExpiry) {
-      warnedExpiry = true;
-      toast(`Esta sala será excluída em ${min} min.`, 8000);
-    }
-  };
-  if (expiresAt) {
-    updateExpiry();
-    setInterval(updateExpiry, 30000);
-  }
   // "Ainda estou aqui": enquanto a página da sala estiver aberta, avisa o banco
   // a cada 30 s. Se ninguém avisar por 5 min (todos saíram ou fecharam o
   // navegador), o banco exclui a sala.
