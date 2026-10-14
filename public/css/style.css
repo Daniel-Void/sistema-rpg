@@ -211,8 +211,6 @@ label { display: block; font-size: 0.82rem; color: var(--text-2); margin: 0.9rem
 .person .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.93rem; }
 .person .sub { font-size: 0.74rem; color: var(--muted); }
 .person .badges { display: flex; gap: 0.3rem; align-items: center; color: var(--danger); }
-.person .controls { display: flex; gap: 0.4rem; width: 100%; padding-left: calc(32px + 0.6rem); }
-.person .controls select { flex: 1; min-width: 0; padding: 0.25rem 0.4rem; font-size: 0.82rem; }
 
 .side { display: flex; flex-direction: column; gap: 1rem; position: sticky; top: 68px; }
 .status-box { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0.9rem 1rem; background: var(--surface); }
@@ -535,9 +533,24 @@ label.check input { width: auto; }
 .check input { width: auto; margin: 0; }
 .track-seek { width: 100%; margin: 0.45rem 0 0.35rem; height: 14px; padding: 0; background: transparent; accent-color: var(--accent); }
 
-/* Volume por pessoa e ações do mestre no card */
-.person .pvol { display: inline-flex; align-items: center; gap: 0.3rem; flex: 1; min-width: 80px; color: var(--muted); }
-.person .pvol input { flex: 1; min-width: 0; }
+/* Menu "⋯" do card de uma pessoa: volume, ambiente e ações, uma por linha */
+.person .pm-toggle { flex: none; opacity: 0.55; transition: opacity 0.15s; }
+.person:hover .pm-toggle, .person.open .pm-toggle, .person .pm-toggle:focus-visible { opacity: 1; }
+.person.open { background: var(--surface-2); }
+.pmenu {
+  width: 100%; display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.35rem;
+  padding: 0.65rem 0.7rem; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg);
+  cursor: default; animation: pmenu-in 0.14s ease-out;
+}
+@keyframes pmenu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.pm-row { display: flex; flex-direction: column; gap: 0.3rem; margin: 0; }
+.pm-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.pm-row input[type=range] { width: 100%; }
+.pm-row select { width: 100%; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+.pm-actions { display: flex; flex-direction: column; gap: 0.35rem; padding-top: 0.15rem; border-top: 1px solid var(--line); }
+.pm-actions button { justify-content: flex-start; width: 100%; margin-top: 0.4rem; }
+.pm-actions button + button { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { .pmenu { animation: none; } }
 .tag.danger { color: var(--danger); border-color: rgba(200, 85, 61, 0.5); }
 
 /* Prévia do mestre: só a cena, como o jogador vê, com uma barra para sair */

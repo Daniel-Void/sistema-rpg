@@ -36,6 +36,7 @@ let screenTrack = null;
 let screenAudioTrack = null; // áudio da aba/tela compartilhada (opcional)
 let shareTarget = { type: 'all' };
 let scenePreview = null; // mestre vendo a cena como o jogador: { scene, zone, label, draft }
+const openPersonMenus = new Set(); // cards de pessoas com o menu "⋯" aberto
 let audioCtx = null;
 let muted = false;
 let isMaster = false;
@@ -604,6 +605,7 @@ async function applyPeerRouting(peer) {
     }
   };
   await replace(peer.audioTx && peer.audioTx.sender, r.sendTo.includes(peer.id) ? micTrack : null);
+  tuneVoiceSender(peer);
   const sharing = isMaster && screenTrack && shareIncludes(peer.id);
   await replace(peer.videoTx && peer.videoTx.sender, sharing ? screenTrack : null);
   if (sharing) tuneScreenSender(peer);
@@ -626,6 +628,26 @@ function tuneScreenSender(peer) {
     sender.setParameters(params).catch((err) => console.warn('screen params', err));
   } catch (err) {
     console.warn('screen params', err);
+  }
+}
+
+/** Voz com mais qualidade: até 64 kbps (o padrão do navegador fica em ~32) e prioridade alta na rede. */
+function tuneVoiceSender(peer) {
+  const sender = peer.audioTx && peer.audioTx.sender;
+  if (!sender || !sender.track || peer.voiceTuned) return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) return; // ainda não negociado
+    params.encodings[0].maxBitrate = 64_000;
+    params.encodings[0].priority = 'high';
+    params.encodings[0].networkPriority = 'high';
+    peer.voiceTuned = true;
+    sender.setParameters(params).catch((err) => {
+      peer.voiceTuned = false;
+      console.warn('voice params', err);
+    });
+  } catch (err) {
+    console.warn('voice params', err);
   }
 }
 
@@ -1692,10 +1714,19 @@ async function startCall() {
   // ouvir, ver a tela do mestre, o ambiente e os dados de todos.
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      // Voz: 48 kHz mono com cancelamento de eco, redução de ruído e ganho automático
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: { ideal: 1 },
+        sampleRate: { ideal: 48000 },
+        sampleSize: { ideal: 16 },
+      },
       video: false,
     });
     micTrack = localStream.getAudioTracks()[0];
+    if (micTrack && 'contentHint' in micTrack) micTrack.contentHint = 'speech';
   } catch (err) {
     console.warn('sem microfone', err);
     localStream = null;
@@ -2140,35 +2171,37 @@ function setupPlayerControls() {
 function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whisperToMaster, whisperRequested, mutedByMaster, master, zoneId }) {
   const me = userId === user.id;
   const draggable = isMaster && !master;
-  const zoneOptions =
-    draggable && state.zones.length > 1
-      ? `<select data-move="${escapeHtml(userId)}" title="Mover para">${state.zones
-          .map((z) => `<option value="${z.id}" ${z.id === zoneId ? 'selected' : ''}>${escapeHtml(z.name)}</option>`)
-          .join('')}</select>`
-      : '';
-  const whisperBtn =
-    isMaster && !master && isOnline
-      ? whisperToMaster
-        ? `<button class="sm icon-only whisper-active" data-action="whisper-end" data-user="${escapeHtml(userId)}" title="Encerrar sussurro com ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
-        : `<button class="sm icon-only ${whisperRequested ? 'whisper-active' : ''}" data-action="whisper-start" data-user="${escapeHtml(userId)}" title="${whisperRequested ? 'Aceitar pedido de' : 'Iniciar sussurro com'} ${escapeHtml(displayName)}">${icon('whisper', 15)}</button>`
-      : '';
+  const uid = escapeHtml(userId);
   const name = escapeHtml(displayName);
-  // Mestre: silenciar e remover jogadores
-  const canMute = db.members.some((m) => 'muted_by_master' in m); // existe depois da migração 17
-  const masterBtns =
-    isMaster && !master
-      ? `${canMute ? `<button class="sm icon-only ${mutedByMaster ? 'whisper-active' : ''}" data-action="mute" data-user="${escapeHtml(userId)}" data-muted="${mutedByMaster ? 1 : 0}" title="${mutedByMaster ? `Deixar ${name} falar de novo` : `Silenciar ${name} para todos`}">${icon(mutedByMaster ? 'micOff' : 'mic', 15)}</button>` : ''}
-         <button class="sm icon-only danger" data-action="kick" data-user="${escapeHtml(userId)}" title="Remover ${name} da sala">${icon('logout', 15)}</button>`
-      : '';
-  // Qualquer um: volume de cada pessoa só para si
-  const volume =
-    !me && isOnline
-      ? `<span class="pvol" title="Volume de ${name} para você">${icon('volume', 13)}<input type="range" min="0" max="1" step="0.05" value="${personVolume(userId)}" data-pvol="${escapeHtml(userId)}" aria-label="Volume de ${name}"></span>`
-      : '';
-  const sub = master ? (isOnline ? 'Na call' : 'Fora da call') : isOnline ? 'Na call' : 'Fora da call';
+  // Menu "⋯" do card: uma linha por opção, com rótulo, em vez de botões lado a lado
+  const rows = [];
+  if (!me && isOnline) {
+    rows.push(`<label class="pm-row"><span class="pm-label">${icon('volume', 14)}Volume para você</span>
+      <input type="range" min="0" max="1" step="0.05" value="${personVolume(userId)}" data-pvol="${uid}" aria-label="Volume de ${name}"></label>`);
+  }
+  if (draggable && state.zones.length > 1) {
+    rows.push(`<label class="pm-row"><span class="pm-label">Ambiente</span>
+      <select data-move="${uid}">${state.zones.map((z) => `<option value="${z.id}" ${z.id === zoneId ? 'selected' : ''}>${escapeHtml(z.name)}</option>`).join('')}</select></label>`);
+  }
+  const actions = [];
+  if (isMaster && !master && isOnline) {
+    if (whisperToMaster) actions.push(`<button class="sm active" data-action="whisper-end" data-user="${uid}">${icon('whisper', 14)}Encerrar conversa particular</button>`);
+    else actions.push(`<button class="sm ${whisperRequested ? 'active' : ''}" data-action="whisper-start" data-user="${uid}">${icon('whisper', 14)}${whisperRequested ? 'Aceitar pedido de conversa' : 'Conversa particular'}</button>`);
+  }
+  const canMute = db.members.some((m) => 'muted_by_master' in m); // existe depois da migração pendente
+  if (isMaster && !master) {
+    if (canMute) actions.push(`<button class="sm ${mutedByMaster ? 'active' : ''}" data-action="mute" data-user="${uid}" data-muted="${mutedByMaster ? 1 : 0}">${icon(mutedByMaster ? 'mic' : 'micOff', 14)}${mutedByMaster ? 'Liberar a voz' : 'Silenciar para todos'}</button>`);
+    actions.push(`<button class="sm danger" data-action="kick" data-user="${uid}">${icon('logout', 14)}Remover da sala</button>`);
+  }
+  if (actions.length) rows.push(`<div class="pm-actions">${actions.join('')}</div>`);
+  const open = openPersonMenus.has(userId);
+  const menuBtn = rows.length
+    ? `<button class="sm quiet icon-only pm-toggle ${open ? 'active' : ''}" data-menu-toggle="${uid}" title="${open ? 'Fechar opções' : `Opções de ${name}`}" aria-expanded="${open}">${icon('more', 16)}</button>`
+    : '';
+  const sub = isOnline ? 'Na call' : 'Fora da call';
   return `
-    <div class="person ${isOnline ? '' : 'offline'} ${master ? 'master' : ''} ${me ? 'me' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
-         data-user="${escapeHtml(userId)}" ${draggable ? 'draggable="true"' : ''}>
+    <div class="person ${isOnline ? '' : 'offline'} ${master ? 'master' : ''} ${me ? 'me' : ''} ${open ? 'open' : ''} ${speaking.has(userId) ? 'speaking' : ''}"
+         data-user="${uid}" ${draggable ? 'data-drag="1" draggable="true"' : ''}>
       <div class="avatar">${escapeHtml(initials(displayName))}</div>
       <div class="info">
         ${master ? '<div class="role">Mestre</div>' : ''}
@@ -2180,7 +2213,8 @@ function personHtml({ userId, displayName, online: isOnline, muted: isMuted, whi
         ${whisperToMaster && isOnline ? '<span class="tag whisper">em sussurro</span>' : ''}
         ${whisperRequested && !whisperToMaster && isOnline ? '<span class="tag accent">pediu sussurro</span>' : ''}
       </div>
-      ${zoneOptions || whisperBtn || masterBtns || volume ? `<div class="controls">${volume}${zoneOptions}${whisperBtn}${masterBtns}</div>` : ''}
+      ${menuBtn}
+      ${rows.length && open ? `<div class="pmenu">${rows.join('')}</div>` : ''}
     </div>`;
 }
 
@@ -2200,8 +2234,40 @@ function sceneSummary(zone) {
   return parts.join('');
 }
 
+// Enquanto alguém arrasta o volume de uma pessoa, não redesenha os cards
+// (senão o controle some no meio do movimento); redesenha ao soltar.
+let personSliderDown = false;
+let renderPending = false;
+document.addEventListener('pointerdown', (e) => {
+  personSliderDown = Boolean(e.target.closest && e.target.closest('input[data-pvol]'));
+  // Card arrastável (mestre move jogadores): só arrasta pelo nome/avatar, nunca pelo menu
+  const card = e.target.closest && e.target.closest('.person[data-drag]');
+  if (card) card.draggable = !e.target.closest('.pmenu, button, input, select, label');
+});
+document.addEventListener('pointerup', () => {
+  if (!personSliderDown) return;
+  personSliderDown = false;
+  if (renderPending) {
+    renderPending = false;
+    render();
+  }
+});
+// Abrir/fechar o menu "⋯" de uma pessoa
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('[data-menu-toggle]');
+  if (!btn) return;
+  const id = btn.dataset.menuToggle;
+  if (openPersonMenus.has(id)) openPersonMenus.delete(id);
+  else openPersonMenus.add(id);
+  render();
+});
+
 function render() {
   if (!state) return;
+  if (personSliderDown) {
+    renderPending = true;
+    return;
+  }
   const myZone = myZoneId();
 
   $('master-row').innerHTML = personHtml({ ...state.master, master: true });
