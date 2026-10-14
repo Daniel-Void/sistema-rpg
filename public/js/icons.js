@@ -13,6 +13,8 @@ const paths = {
   repeat: '<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>',
   next: '<path d="M5 5l10 7-10 7z"/><path d="M19 5v14"/>',
   up: '<path d="M6 15l6-6 6 6"/>',
+  panel: '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>',
+  panelOff: '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/><path d="M18 9l-2 3 2 3"/>',
   down: '<path d="M6 9l6 6 6-6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',

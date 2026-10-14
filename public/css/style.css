@@ -336,20 +336,37 @@ body.immersive .scene-text:not(:empty) {
 /* Interface sobre o ambiente: vidro escuro translúcido, o ambiente aparece por trás */
 body.immersive .topbar, body.immersive .room-layout { position: relative; z-index: 1; transition: opacity 0.9s ease; }
 body.immersive .topbar { background: linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0)); border-bottom-color: transparent; }
-/* Jogador no ambiente: coluna à esquerda com o mestre no topo e os ambientes
-   logo abaixo, na mesma largura; o texto da cena fica ao lado. */
+/* Jogador no ambiente: a cena ocupa a tela. Mestre pequeno no canto superior
+   esquerdo, o card do ambiente pequeno embaixo, e o texto da cena ao lado. */
 body.immersive .room-main {
-  min-height: calc(100vh - 92px); display: grid; align-content: start; column-gap: 1.5rem; row-gap: 0.75rem;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+  min-height: calc(100vh - 92px); display: grid; column-gap: 1.5rem; row-gap: 0.75rem;
+  grid-template-columns: minmax(200px, 250px) minmax(0, 1fr); grid-template-rows: auto 1fr auto;
 }
-body.immersive .master-row { grid-column: 1; grid-row: 1; }
-body.immersive .zones { grid-column: 1; grid-row: 2; grid-template-columns: 1fr; align-self: start; }
+body.immersive .master-row { grid-column: 1; grid-row: 1; max-width: 250px; }
+body.immersive .zones { grid-column: 1; grid-row: 3; grid-template-columns: 1fr; align-self: end; }
 body.immersive .scene-text { grid-column: 2; grid-row: 1 / span 3; }
 body.immersive .stage { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
+/* Cards compactos sobre a cena */
+body.immersive .person.master { padding: 0.45rem 0.55rem; gap: 0.55rem; }
+body.immersive .person.master .avatar { width: 32px; height: 32px; font-size: 0.8rem; border-width: 1px; }
+body.immersive .person.master .name { font-size: 1rem; }
+body.immersive .person.master .role { font-size: 0.62rem; }
+body.immersive .person { padding: 0.3rem 0.4rem; gap: 0.5rem; }
+body.immersive .person .avatar { width: 26px; height: 26px; font-size: 0.7rem; }
+body.immersive .person .name { font-size: 0.85rem; }
+body.immersive .person .sub { font-size: 0.68rem; }
+body.immersive .person .controls { padding-left: calc(26px + 0.5rem); }
+body.immersive .zone-head { padding: 0.5rem 0.6rem 0.3rem; }
+body.immersive .zone-head h3 { font-size: 0.92rem; }
+body.immersive .zone-players { padding: 0 0.35rem 0.4rem; gap: 0.15rem; }
 @media (max-width: 760px) {
   body.immersive .room-main { grid-template-columns: 1fr; }
   body.immersive .master-row, body.immersive .zones, body.immersive .scene-text, body.immersive .stage { grid-column: 1; grid-row: auto; }
 }
+
+/* Painel da direita recolhido (botão no topo): a cena fica com a tela toda */
+body.side-collapsed .side { display: none; }
+body.side-collapsed .room-layout { grid-template-columns: minmax(0, 1fr); }
 body.immersive .panel,
 body.immersive .zone,
 body.immersive .status-box,

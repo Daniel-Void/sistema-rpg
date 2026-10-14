@@ -870,10 +870,24 @@ function setUiHidden(hidden) {
 }
 $('ui-toggle').onclick = () => setUiHidden(true);
 $('ui-restore').onclick = () => setUiHidden(false);
+
+// Abrir/fechar o painel da direita (fica salvo neste aparelho)
+function setSideCollapsed(collapsed) {
+  document.body.classList.toggle('side-collapsed', collapsed);
+  store('rpg-side-collapsed', collapsed);
+  $('side-toggle').innerHTML = icon(collapsed ? 'panelOff' : 'panel', 16);
+  $('side-toggle').title = collapsed ? 'Mostrar painel da direita (P)' : 'Esconder painel da direita (P)';
+  $('side-toggle').classList.toggle('active', collapsed);
+}
+$('side-toggle').onclick = () => setSideCollapsed(!document.body.classList.contains('side-collapsed'));
+setSideCollapsed(readStored('rpg-side-collapsed', false));
+
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'h' || e.key === 'H') && !e.repeat && !e.target.closest('input, textarea, select') && document.body.classList.contains('immersive')) {
+  if (e.repeat || e.target.closest('input, textarea, select')) return;
+  if ((e.key === 'h' || e.key === 'H') && document.body.classList.contains('immersive')) {
     setUiHidden(!document.body.classList.contains('ui-hidden'));
   }
+  if (e.key === 'p' || e.key === 'P') setSideCollapsed(!document.body.classList.contains('side-collapsed'));
 });
 
 // No ambiente imersivo a interface esmaece depois de alguns segundos parada,
