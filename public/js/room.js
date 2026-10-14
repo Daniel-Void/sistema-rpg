@@ -1840,11 +1840,14 @@ function setupMasterControls() {
     });
   });
 
-  $('zone-form').addEventListener('submit', () => {
-    const name = $('zone-name').value.trim();
+  // Novo ambiente (aba Cena): cria e já seleciona em "Mostrar para"
+  $('zone-form').addEventListener('submit', async () => {
+    const name = $('zone-name').value.trim().slice(0, 40);
     if (!name) return;
-    rpc('create_zone', { p_name: name });
     $('zone-name').value = '';
+    if (!(await rpc('create_zone', { p_name: name }))) return;
+    pendingSceneZone = name;
+    scheduleRefresh();
   });
 
   $('targets').addEventListener('click', (e) => {
@@ -1950,13 +1953,6 @@ function setupMasterControls() {
     renderSceneEditor();
   };
   $('scene-caption').oninput = (e) => (sceneDraft.caption = e.target.value);
-  $('scene-new-zone').onclick = async () => {
-    const name = (prompt('Nome do novo ambiente (ex.: Floresta, Caverna):') || '').trim().slice(0, 40);
-    if (!name) return;
-    if (!(await rpc('create_zone', { p_name: name }))) return;
-    pendingSceneZone = name;
-    scheduleRefresh();
-  };
   $('scene-apply').onclick = () => applyScene(sceneDraft);
   $('scene-preview').onclick = () => openScenePreview(sceneDest, sceneDraft);
   $('preview-exit').onclick = closeScenePreview;

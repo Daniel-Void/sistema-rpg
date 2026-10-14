@@ -76,21 +76,18 @@
         <div data-panel="voz">
           <div id="targets" class="list"></div>
           <p class="hint" style="margin-top:0.75rem"><kbd>Esc</kbd> volta a falar com todos.</p>
-          <hr class="divider">
-          <p class="eyebrow">Novo ambiente</p>
-          <form id="zone-form" class="inline" onsubmit="return false">
-            <input id="zone-name" maxlength="40" placeholder="Floresta" required>
-            <button type="submit" class="primary sm">Criar</button>
-          </form>
           <p class="hint" style="margin-top:0.5rem">Arraste jogadores entre os ambientes ou use o seletor no card.</p>
         </div>
 
         <div data-panel="cena" hidden>
+          <p class="eyebrow" style="margin-top:0">Novo ambiente</p>
+          <form id="zone-form" class="inline" onsubmit="return false">
+            <input id="zone-name" maxlength="40" placeholder="Floresta" required>
+            <button type="submit" class="primary sm">Criar</button>
+          </form>
+          <hr class="divider">
           <label for="scene-dest" style="margin-top:0">Mostrar para</label>
-          <div class="inline">
-            <select id="scene-dest"></select>
-            <button id="scene-new-zone" class="sm" title="Criar um novo ambiente e montar a cena dele"><i data-icon="plus" data-size="14"></i>Novo ambiente</button>
-          </div>
+          <select id="scene-dest"></select>
           <label>Imagem do ambiente</label>
           <div id="scene-visuals" class="thumbs"></div>
           <label for="scene-caption">Texto na tela</label>
