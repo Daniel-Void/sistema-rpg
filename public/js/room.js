@@ -2724,6 +2724,13 @@ if (!db) {
     updateExpiry();
     setInterval(updateExpiry, 30000);
   }
+  // "Ainda estou aqui": enquanto a página da sala estiver aberta, avisa o banco
+  // a cada 30 s. Se ninguém avisar por 5 min (todos saíram ou fecharam o
+  // navegador), o banco exclui a sala.
+  const heartbeat = () => supabase.rpc('room_heartbeat', { p_room_id: roomId }).then(({ error }) => error && console.warn('heartbeat', error.message));
+  heartbeat();
+  setInterval(heartbeat, 30000);
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && heartbeat());
   setupDiceControls();
   loadRolls();
   if (isMaster) {
