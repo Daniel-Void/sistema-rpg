@@ -29,13 +29,12 @@
       <div class="box">
         <div class="entry-tabs" role="tablist">
           <button type="button" role="tab" data-tab="entrar" aria-selected="true">Entrar</button>
-          <button type="button" role="tab" data-tab="criar" aria-selected="false">Criar conta</button>
           <button type="button" role="tab" data-tab="rapido" aria-selected="false">Sem conta</button>
         </div>
 
         <form id="login-form" data-panel="entrar" onsubmit="return false">
           <h2>Entrar na mesa</h2>
-          <p class="muted small">Use o e-mail e a senha da sua conta.</p>
+          <p class="muted small">Use o e-mail e a senha da sua conta. As contas são criadas pelos administradores.</p>
           <label for="login-email">E-mail</label>
           <input id="login-email" name="email" type="email" autocomplete="email" required>
           <label for="login-password">Senha</label>
@@ -44,29 +43,6 @@
           <button type="submit" class="primary">Entrar</button>
           <div class="error" id="login-error" role="alert"></div>
           <button type="button" class="link-btn small" id="forgot">Esqueci minha senha</button>
-        </form>
-
-        <form id="signup-form" data-panel="criar" class="hidden" onsubmit="return false">
-          <h2>Criar conta</h2>
-          <p class="muted small">A conta vale em qualquer aparelho: é só entrar com o mesmo e-mail.</p>
-          <label for="signup-name">Nome</label>
-          <input id="signup-name" name="name" maxlength="40" required autocomplete="nickname" placeholder="Como os outros vão te ver">
-          <label for="signup-email">E-mail</label>
-          <input id="signup-email" name="email" type="email" autocomplete="email" required>
-          <label for="signup-password">Senha</label>
-          <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="6" required placeholder="Pelo menos 6 caracteres">
-          <label for="signup-confirm">Repita a senha</label>
-          <input id="signup-confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required>
-          <label class="check"><input type="checkbox" data-show-password> Mostrar senha</label>
-          <label>Papel</label>
-          <div class="segmented">
-            <input type="radio" name="role" id="signup-jogador" value="jogador" checked>
-            <label for="signup-jogador">Jogador</label>
-            <input type="radio" name="role" id="signup-mestre" value="mestre">
-            <label for="signup-mestre">Mestre</label>
-          </div>
-          <button type="submit" class="primary">Criar conta</button>
-          <div class="error" id="signup-error" role="alert"></div>
         </form>
 
         <form id="temp-form" data-panel="rapido" class="hidden" onsubmit="return false">

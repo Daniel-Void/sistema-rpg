@@ -81,33 +81,6 @@ document.getElementById('forgot').addEventListener('click', async (e) => {
   else showMessage(`Se existir uma conta com ${email}, enviamos um link para criar uma nova senha.`, true);
 });
 
-const signupForm = document.getElementById('signup-form');
-handle(signupForm, 'signup-error', async (fields) => {
-  const name = fields.name.trim();
-  if (!name) throw new Error('Informe seu nome.');
-  checkPasswords(fields);
-  const email = fields.email.trim();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password: fields.password,
-    options: { data: { display_name: name, role: fields.role }, emailRedirectTo: `${location.origin}/` },
-  });
-  if (error) throw error;
-  if (data.session) {
-    location.replace(destination);
-    return;
-  }
-  // Com confirmação de e-mail ligada, o Supabase não diz se o e-mail já tinha conta:
-  // nesse caso devolve um usuário sem identidades.
-  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-    throw new Error('Já existe uma conta com esse e-mail. Use a aba Entrar.');
-  }
-  signupForm.reset();
-  showPanel('entrar');
-  document.getElementById('login-email').value = email;
-  showMessage(`Conta criada. Enviamos um link de confirmação para ${email}; depois de confirmar, é só entrar.`, true);
-});
-
 const tempForm = document.getElementById('temp-form');
 handle(tempForm, 'temp-error', async ({ name, role }) => {
   const password = randomPassword();
