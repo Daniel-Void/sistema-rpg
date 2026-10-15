@@ -13,8 +13,8 @@ separados**, cenas imersivas, música sincronizada e dados rolados no servidor.
 - **Sem emojis** na interface. Ícones são SVG (`public/js/icons.js`).
 - Visual escuro, sóbrio e imersivo: fontes Spectral + IBM Plex, acento `#c8553d`.
   Não deve parecer "feito por IA".
-- Acesso sem login: usuário temporário (nome + papel, sem e-mail nem senha).
-  No futuro só admins criarão usuários.
+- Só administradores criam contas (e-mail e senha). Não há cadastro aberto nem
+  usuário temporário: `create_temp_account` está sem permissão de execução.
 - **Jogador não pede rolagem.** Só rola quando o mestre manda (`order_roll`).
 - **Sussurro:** o jogador só *pede*; o mestre aceita ou força.
 - Jogador vê **só o ambiente em que está**; o mestre vê todos e move jogadores.

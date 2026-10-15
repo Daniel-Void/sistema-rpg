@@ -27,11 +27,6 @@
 
     <section class="entry-form">
       <div class="box">
-        <div class="entry-tabs" role="tablist">
-          <button type="button" role="tab" data-tab="entrar" aria-selected="true">Entrar</button>
-          <button type="button" role="tab" data-tab="rapido" aria-selected="false">Sem conta</button>
-        </div>
-
         <form id="login-form" data-panel="entrar" onsubmit="return false">
           <h2>Entrar na mesa</h2>
           <p class="muted small">Use o e-mail e a senha da sua conta. As contas são criadas pelos administradores.</p>
@@ -43,22 +38,6 @@
           <button type="submit" class="primary">Entrar</button>
           <div class="error" id="login-error" role="alert"></div>
           <button type="button" class="link-btn small" id="forgot">Esqueci minha senha</button>
-        </form>
-
-        <form id="temp-form" data-panel="rapido" class="hidden" onsubmit="return false">
-          <h2>Entrar sem conta</h2>
-          <p class="muted small">Sem e-mail e sem senha. O usuário fica salvo só neste navegador: se sair ou trocar de aparelho, ele não volta.</p>
-          <label for="temp-name">Nome</label>
-          <input id="temp-name" name="name" maxlength="40" required autocomplete="nickname" placeholder="Como os outros vão te ver">
-          <label>Papel</label>
-          <div class="segmented">
-            <input type="radio" name="role" id="role-jogador" value="jogador" checked>
-            <label for="role-jogador">Jogador</label>
-            <input type="radio" name="role" id="role-mestre" value="mestre">
-            <label for="role-mestre">Mestre</label>
-          </div>
-          <button type="submit" class="primary">Entrar</button>
-          <div class="error" id="temp-error" role="alert"></div>
         </form>
 
         <form id="reset-form" data-panel="nova-senha" class="hidden" onsubmit="return false">

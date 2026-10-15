@@ -129,10 +129,6 @@ label { display: block; font-size: 0.82rem; color: var(--text-2); margin: 0.9rem
 .entry-form .box > form button[type=submit] { width: 100%; margin-top: 1.25rem; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--text-2); text-decoration: underline; text-underline-offset: 3px; font-weight: 400; }
 .link-btn:hover { background: none; color: var(--text); }
-.entry-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border-bottom: 1px solid var(--line); margin-bottom: 1.5rem; }
-.entry-tabs button { border: 0; border-radius: 0; padding: 0.7rem 0.4rem; color: var(--text-2); font-size: 0.9rem; }
-.entry-tabs button:hover { background: var(--surface-2); }
-.entry-tabs button[aria-selected=true] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
 .entry-form .box > form .link-btn { margin-top: 0.4rem; }
 label.check { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; cursor: pointer; }
 label.check input { width: auto; margin: 0; accent-color: var(--accent); }

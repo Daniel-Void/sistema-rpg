@@ -17,17 +17,13 @@ function showMessage(text, ok = false) {
   messageEl.classList.toggle('hidden', !text);
 }
 
-const tabs = [...document.querySelectorAll('.entry-tabs [data-tab]')];
 const panels = [...document.querySelectorAll('[data-panel]')];
 function showPanel(name) {
-  for (const tab of tabs) tab.setAttribute('aria-selected', String(tab.dataset.tab === name));
   for (const panel of panels) panel.classList.toggle('hidden', panel.dataset.panel !== name);
-  document.querySelector('.entry-tabs').classList.toggle('hidden', name === 'nova-senha');
   showMessage('');
-  const first = document.querySelector(`[data-panel="${name}"] input:not([type=radio]):not([type=checkbox])`);
+  const first = document.querySelector(`[data-panel="${name}"] input:not([type=checkbox])`);
   if (first && !first.value) first.focus();
 }
-for (const tab of tabs) tab.addEventListener('click', () => showPanel(tab.dataset.tab));
 
 for (const box of document.querySelectorAll('[data-show-password]')) {
   box.addEventListener('change', () => {
@@ -80,21 +76,6 @@ document.getElementById('forgot').addEventListener('click', async (e) => {
   if (error) errorEl.textContent = friendlyError(error);
   else showMessage(`Se existir uma conta com ${email}, enviamos um link para criar uma nova senha.`, true);
 });
-
-const tempForm = document.getElementById('temp-form');
-handle(tempForm, 'temp-error', async ({ name, role }) => {
-  const password = randomPassword();
-  const { data: email, error } = await supabase.rpc('create_temp_account', { p_name: name.trim(), p_role: role, p_password: password });
-  if (error) throw error;
-  const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-  if (loginError) throw loginError;
-  location.replace(destination);
-});
-
-function randomPassword() {
-  const bytes = crypto.getRandomValues(new Uint8Array(24));
-  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]);
-}
 
 const resetForm = document.getElementById('reset-form');
 handle(resetForm, 'reset-error', async (fields) => {
