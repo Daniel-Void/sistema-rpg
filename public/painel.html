@@ -50,6 +50,32 @@
       </section>
     </div>
 
+    <section class="panel hidden" id="players-card" style="margin-top:1rem">
+      <p class="eyebrow">Mestre</p>
+      <h2>Jogadores</h2>
+      <p class="muted small">Só você cria contas. Passe o usuário e a senha para o jogador; ele entra com eles na tela inicial.</p>
+      <div class="grid-2">
+        <form id="player-form" onsubmit="return false">
+          <label for="player-name">Nome exibido</label>
+          <input id="player-name" name="name" maxlength="40" required placeholder="Como os outros vão ver">
+          <label for="player-user">Usuário</label>
+          <input id="player-user" name="username" class="mono" maxlength="30" required autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="ana.silva">
+          <label for="player-password">Senha</label>
+          <div class="password-field">
+            <input id="player-password" name="password" class="mono" minlength="8" maxlength="72" required autocomplete="new-password" placeholder="Pelo menos 8 caracteres">
+            <button type="button" id="player-generate">Gerar</button>
+          </div>
+          <button type="submit" class="primary" style="margin-top:1rem">Criar jogador</button>
+          <div class="error" id="player-error" role="alert"></div>
+          <div id="player-created" class="note hidden"></div>
+        </form>
+        <div>
+          <label>Contas de jogador</label>
+          <div id="players" class="players"></div>
+        </div>
+      </div>
+    </section>
+
     <div class="page-head" style="margin-top:2.5rem">
       <h2 style="margin:0">Minhas salas</h2>
     </div>

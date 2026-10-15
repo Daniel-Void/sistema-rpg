@@ -27,34 +27,17 @@
 
     <section class="entry-form">
       <div class="box">
-        <p class="eyebrow">Acesso de teste</p>
-        <h2>Criar usuário temporário</h2>
-        <p class="muted small">Sem e-mail e sem senha. O usuário fica salvo neste navegador: cada aparelho cria o seu.</p>
-
-        <form id="temp-form" onsubmit="return false">
-          <label for="temp-name">Nome</label>
-          <input id="temp-name" name="name" maxlength="40" required autocomplete="nickname" placeholder="Como os outros vão te ver">
-          <label>Papel</label>
-          <div class="segmented">
-            <input type="radio" name="role" id="role-jogador" value="jogador" checked>
-            <label for="role-jogador">Jogador</label>
-            <input type="radio" name="role" id="role-mestre" value="mestre">
-            <label for="role-mestre">Mestre</label>
-          </div>
-          <button type="submit" class="primary">Entrar</button>
-          <div class="error" id="temp-error"></div>
-        </form>
-
-        <p class="note">Usuários temporários são para testes. A criação de contas definitivas vai ficar restrita aos administradores.</p>
-        <button type="button" class="link-btn small" id="show-email">Entrar com e-mail e senha</button>
-
-        <form id="login-form" class="hidden" onsubmit="return false">
-          <label for="login-email">E-mail</label>
-          <input id="login-email" name="email" type="email" autocomplete="email" required>
+        <form id="login-form" onsubmit="return false">
+          <h2>Entrar na mesa</h2>
+          <p class="muted small">Use o usuário e a senha que o mestre criou para você.</p>
+          <label for="login-user">Usuário</label>
+          <input id="login-user" name="user" autocomplete="username" autocapitalize="none" spellcheck="false" required>
           <label for="login-password">Senha</label>
           <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-          <button type="submit">Entrar com e-mail</button>
-          <div class="error" id="login-error"></div>
+          <label class="check"><input type="checkbox" data-show-password> Mostrar senha</label>
+          <button type="submit" class="primary">Entrar</button>
+          <div class="error" id="login-error" role="alert"></div>
+          <p class="note">Esqueceu a senha? Peça ao mestre para trocar.</p>
         </form>
       </div>
     </section>

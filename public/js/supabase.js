@@ -3,6 +3,14 @@ import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Contas criadas pelo mestre entram com nome de usuário; no Auth elas têm um
+// e-mail interno nesse domínio. Contas antigas ainda entram com o e-mail.
+export const USERNAME_DOMAIN = 'usuarios.sistema-rpg.example.com';
+export function loginEmail(user) {
+  const value = String(user || '').trim().toLowerCase();
+  return value.includes('@') ? value : `${value}@${USERNAME_DOMAIN}`;
+}
+
 /** Usuário logado com o perfil (nome exibido e papel), ou null. */
 export async function currentUser() {
   const { data } = await supabase.auth.getSession();
