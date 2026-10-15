@@ -27,31 +27,18 @@
 
     <section class="entry-form">
       <div class="box">
-        <form id="login-form" data-panel="entrar" onsubmit="return false">
+        <form id="login-form" onsubmit="return false">
           <h2>Entrar na mesa</h2>
-          <p class="muted small">Use o e-mail e a senha da sua conta. As contas são criadas pelos administradores.</p>
-          <label for="login-email">E-mail</label>
-          <input id="login-email" name="email" type="email" autocomplete="email" required>
+          <p class="muted small">Use o usuário e a senha que o mestre criou para você.</p>
+          <label for="login-user">Usuário</label>
+          <input id="login-user" name="user" autocomplete="username" autocapitalize="none" spellcheck="false" required>
           <label for="login-password">Senha</label>
           <input id="login-password" name="password" type="password" autocomplete="current-password" required>
           <label class="check"><input type="checkbox" data-show-password> Mostrar senha</label>
           <button type="submit" class="primary">Entrar</button>
           <div class="error" id="login-error" role="alert"></div>
-          <button type="button" class="link-btn small" id="forgot">Esqueci minha senha</button>
+          <p class="note">Esqueceu a senha? Peça ao mestre para trocar.</p>
         </form>
-
-        <form id="reset-form" data-panel="nova-senha" class="hidden" onsubmit="return false">
-          <h2>Nova senha</h2>
-          <p class="muted small">Escolha a nova senha da sua conta.</p>
-          <label for="reset-password">Nova senha</label>
-          <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="6" required>
-          <label for="reset-confirm">Repita a senha</label>
-          <input id="reset-confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required>
-          <button type="submit" class="primary">Salvar e entrar</button>
-          <div class="error" id="reset-error" role="alert"></div>
-        </form>
-
-        <div id="entry-message" class="entry-message hidden" role="status"></div>
       </div>
     </section>
   </main>

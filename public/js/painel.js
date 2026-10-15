@@ -11,6 +11,7 @@ const roleTag = document.getElementById('role-tag');
 roleTag.textContent = user.role === 'mestre' ? 'Mestre' : 'Jogador';
 if (user.role === 'mestre') roleTag.classList.add('accent');
 if (user.role !== 'mestre') document.getElementById('create-card').classList.add('hidden');
+else document.getElementById('players-card').classList.remove('hidden');
 
 document.getElementById('logout').addEventListener('click', async () => {
   await supabase.auth.signOut();
@@ -111,5 +112,97 @@ document.getElementById('join-form').addEventListener('submit', async (e) => {
   else location.href = `/sala/${roomId}`;
 });
 
+// ---------- Contas de jogador (só o mestre, que é o admin) ----------
+
+const playersEl = document.getElementById('players');
+const playerForm = document.getElementById('player-form');
+
+/** Senha fácil de ditar: sem letras parecidas (l/1, O/0). */
+function generatePassword(length = 12) {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+}
+
+async function loadPlayers() {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, display_name, username')
+    .eq('role', 'jogador')
+    .not('username', 'is', null)
+    .order('display_name');
+  if (error) {
+    playersEl.innerHTML = '<div class="hint">Não foi possível carregar as contas.</div>';
+    return;
+  }
+  playersEl.innerHTML = data.length
+    ? data
+        .map(
+          (p) => `
+      <div class="player-row">
+        <div class="info"><div class="name">${escapeHtml(p.display_name)}</div><div class="user">${escapeHtml(p.username)}</div></div>
+        <button class="sm quiet" data-reset="${p.id}" data-name="${escapeHtml(p.display_name)}" data-user="${escapeHtml(p.username)}">Trocar senha</button>
+        <button class="sm quiet icon-only" data-remove="${p.id}" data-name="${escapeHtml(p.display_name)}" title="Excluir conta">${icon('trash', 15)}</button>
+      </div>`,
+        )
+        .join('')
+    : '<div class="hint">Nenhum jogador criado ainda.</div>';
+}
+
+function showCredentials(username, password, title) {
+  const box = document.getElementById('player-created');
+  box.innerHTML = `${escapeHtml(title)}<br>Usuário: <span class="mono">${escapeHtml(username)}</span><br>Senha: <span class="mono">${escapeHtml(password)}</span>
+    <div style="margin-top:0.5rem"><button type="button" class="sm" data-copy-login>${icon('copy', 14)}Copiar usuário e senha</button></div>`;
+  box.querySelector('[data-copy-login]').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(`Usuário: ${username}\nSenha: ${password}\n${location.origin}`);
+    toast('Usuário e senha copiados.');
+  });
+  box.classList.remove('hidden');
+}
+
+document.getElementById('player-generate').addEventListener('click', () => {
+  document.getElementById('player-password').value = generatePassword();
+});
+
+playerForm.addEventListener('submit', async () => {
+  const errorEl = document.getElementById('player-error');
+  const button = playerForm.querySelector('button[type=submit]');
+  errorEl.textContent = '';
+  const { name, username, password } = Object.fromEntries(new FormData(playerForm));
+  const login = username.trim().toLowerCase();
+  button.disabled = true;
+  const { error } = await supabase.rpc('create_player_account', { p_username: login, p_display_name: name.trim(), p_password: password });
+  button.disabled = false;
+  if (error) {
+    errorEl.textContent = friendlyError(error);
+    return;
+  }
+  playerForm.reset();
+  showCredentials(login, password, `Conta de ${name.trim()} criada.`);
+  await loadPlayers();
+});
+
+playersEl.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  try {
+    if (btn.dataset.reset) {
+      const password = prompt(`Nova senha para ${btn.dataset.name} (pelo menos 8 caracteres):`, generatePassword());
+      if (password === null) return;
+      const { error } = await supabase.rpc('set_player_password', { p_user: btn.dataset.reset, p_password: password });
+      if (error) throw error;
+      showCredentials(btn.dataset.user, password, `Senha de ${btn.dataset.name} trocada.`);
+    } else if (btn.dataset.remove) {
+      if (!confirm(`Excluir a conta de ${btn.dataset.name}? Isso não pode ser desfeito.`)) return;
+      const { error } = await supabase.rpc('delete_player_account', { p_user: btn.dataset.remove });
+      if (error) throw error;
+      await loadPlayers();
+    }
+  } catch (err) {
+    toast(friendlyError(err));
+  }
+});
+
+if (user.role === 'mestre') loadPlayers();
 loadRooms().catch((err) => toast(friendlyError(err)));
 cleanupOrphanFiles().catch(() => {});

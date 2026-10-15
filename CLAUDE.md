@@ -13,8 +13,10 @@ separados**, cenas imersivas, música sincronizada e dados rolados no servidor.
 - **Sem emojis** na interface. Ícones são SVG (`public/js/icons.js`).
 - Visual escuro, sóbrio e imersivo: fontes Spectral + IBM Plex, acento `#c8553d`.
   Não deve parecer "feito por IA".
-- Só administradores criam contas (e-mail e senha). Não há cadastro aberto nem
-  usuário temporário: `create_temp_account` está sem permissão de execução.
+- **Uma única conta é admin e mestre** (usuário `lelis`). Só ela cria salas e
+  cria/troca senha/exclui contas de **jogador** (painel > Jogadores). Ninguém se
+  cadastra sozinho e não há usuário temporário. Login é por nome de usuário; no
+  Auth a conta tem o e-mail interno `<usuário>@usuarios.sistema-rpg.example.com`.
 - **Jogador não pede rolagem.** Só rola quando o mestre manda (`order_roll`).
 - **Sussurro:** o jogador só *pede*; o mestre aceita ou força.
 - Jogador vê **só o ambiente em que está**; o mestre vê todos e move jogadores.

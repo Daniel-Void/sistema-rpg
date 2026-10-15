@@ -129,11 +129,6 @@ label { display: block; font-size: 0.82rem; color: var(--text-2); margin: 0.9rem
 .entry-form .box > form button[type=submit] { width: 100%; margin-top: 1.25rem; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--text-2); text-decoration: underline; text-underline-offset: 3px; font-weight: 400; }
 .link-btn:hover { background: none; color: var(--text); }
-.entry-form .box > form .link-btn { margin-top: 0.4rem; }
-label.check { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; cursor: pointer; }
-label.check input { width: auto; margin: 0; accent-color: var(--accent); }
-.entry-message { border: 1px solid var(--line-strong); border-left: 2px solid var(--accent); border-radius: var(--radius); background: var(--surface); padding: 0.85rem 1rem; margin-top: 1.25rem; font-size: 0.9rem; color: var(--text-2); }
-.entry-message.ok { border-left-color: var(--ok); }
 
 /* ---------- Barra superior ---------- */
 .topbar {
@@ -153,6 +148,12 @@ label.check input { width: auto; margin: 0; accent-color: var(--accent); }
 .page-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .room-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.players { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 1rem; }
+.player-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.player-row .info { flex: 1; min-width: 0; }
+.player-row .name { font-size: 0.93rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player-row .user { font-family: var(--font-mono); font-size: 0.76rem; color: var(--muted); }
+.password-field { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
 .room-card { display: flex; flex-direction: column; gap: 0.6rem; }
 .room-card h3 { margin: 0; }
 .room-card .meta { display: flex; gap: 0.4rem; flex-wrap: wrap; }
